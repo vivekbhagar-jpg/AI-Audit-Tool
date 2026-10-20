@@ -1,14 +1,10 @@
-import { 
-  doc, 
-  getDoc, 
-  setDoc, 
-  serverTimestamp 
-} from 'firebase/firestore';
-import { db, auth, isFirebaseConfigured } from '../lib/firebase';
-import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
-
-const RUBRICS_COLLECTION = 'audit_rubrics';
-const DEFAULT_RUBRIC_ID = 'rubric-8factor-v5';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * Rubric Service for NxtWave AI Audit Platform
+ * Connects to local Express + SQLite API (/api/rubrics).
+ */
 
 export interface RubricWeightsConfig {
   greeting: number;
@@ -33,54 +29,36 @@ export const DEFAULT_RUBRIC_WEIGHTS: RubricWeightsConfig = {
 };
 
 /**
- * Fetch default 8-factor rubric weights from Firestore
+ * Fetch default 8-factor rubric weights via backend API
  */
 export async function getRubricWeights(): Promise<{ weights: RubricWeightsConfig; fromFirestore: boolean }> {
-  if (!isFirebaseConfigured || !db) {
-    return { weights: DEFAULT_RUBRIC_WEIGHTS, fromFirestore: false };
-  }
-
-  const docPath = `${RUBRICS_COLLECTION}/${DEFAULT_RUBRIC_ID}`;
   try {
-    const docSnap = await getDoc(doc(db, RUBRICS_COLLECTION, DEFAULT_RUBRIC_ID));
-    if (docSnap.exists()) {
-      const data = docSnap.data();
+    const res = await fetch('/api/rubrics');
+    if (res.ok) {
+      const data = await res.json();
       if (data.weights) {
         return { weights: data.weights as RubricWeightsConfig, fromFirestore: true };
       }
     }
   } catch (error) {
-    console.warn('[RubricService] Failed to load rubric from Firestore:', error);
-    try {
-      handleFirestoreError(error, OperationType.GET, docPath, auth?.currentUser);
-    } catch {
-      // Error logged
-    }
+    console.warn('[RubricService] Failed to load rubric from API:', error);
   }
 
   return { weights: DEFAULT_RUBRIC_WEIGHTS, fromFirestore: false };
 }
 
 /**
- * Save updated rubric weights to Firestore
+ * Save updated rubric weights via backend API
  */
 export async function saveRubricWeights(weights: RubricWeightsConfig): Promise<void> {
-  if (!isFirebaseConfigured || !db) {
-    return;
-  }
+  const res = await fetch('/api/rubrics', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ weights })
+  });
 
-  const docPath = `${RUBRICS_COLLECTION}/${DEFAULT_RUBRIC_ID}`;
-  try {
-    await setDoc(doc(db, RUBRICS_COLLECTION, DEFAULT_RUBRIC_ID), {
-      id: DEFAULT_RUBRIC_ID,
-      name: 'NxtWave 8-Factor Quality QA Rubric',
-      version: 'v5.1',
-      isDefault: true,
-      weights,
-      updatedBy: auth?.currentUser?.uid || 'system',
-      updatedAt: serverTimestamp(),
-    }, { merge: true });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, docPath, auth?.currentUser);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to update rubric weights.');
   }
 }

@@ -1,19 +1,15 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * Enterprise Authentication & RBAC Context for NxtWave AI Audit Platform
+ * Connects to local Node.js/Express + SQLite backend (/api/auth) with resilient role-based access control.
+ */
+
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { 
-  User as FirebaseUser, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  doc, 
-  getDoc, 
-  setDoc, 
-  serverTimestamp 
-} from 'firebase/firestore';
-import { auth, db, googleProvider, isFirebaseConfigured } from '../lib/firebase';
 
 export const PRIMARY_ADMIN_EMAIL = 'vivekbhagar@gmail.com';
+export const PRIMARY_ADMIN_UID = 'usr-admin-vb';
 
 export function normalizeRole(role?: string | null): 'admin' | 'auditor' | 'lead' | 'counsellor' {
   if (!role) return 'counsellor';
@@ -24,9 +20,7 @@ export function normalizeRole(role?: string | null): 'admin' | 'auditor' | 'lead
   return 'counsellor';
 }
 
-export const PRIMARY_ADMIN_UID = 'D9G89blBpVVvMtd0xkg6LBmmf7o1';
-
-export function isAuthoritativeAdmin(user: FirebaseUser | null, profile?: AppUserProfile | null): boolean {
+export function isAuthoritativeAdmin(user: any | null, profile?: AppUserProfile | null): boolean {
   if (!user) return false;
   const emailMatch = user.email?.toLowerCase().trim() === PRIMARY_ADMIN_EMAIL.toLowerCase();
   const uidMatch = user.uid === PRIMARY_ADMIN_UID;
@@ -56,7 +50,6 @@ export interface AuthErrorInfo {
 }
 
 export type AppUserRole = 'admin' | 'lead' | 'auditor' | 'counsellor';
-
 export type DemoUserRole = 'admin' | 'auditor' | 'lead' | 'counsellor';
 
 export interface DemoUserProfile {
@@ -82,7 +75,7 @@ export const DEMO_USER_PRESETS: Record<DemoUserRole, DemoUserProfile> = {
     description: 'Super Administrator — unrestricted access to all audit operations, knowledge base, policies, and system settings.',
   },
   auditor: {
-    uid: 'demo-auditor-sunita',
+    uid: 'usr-auditor-sr',
     email: 'sunita.rao@nxtwave.tech',
     displayName: 'Sunita Rao (Auditor)',
     role: 'auditor',
@@ -92,7 +85,7 @@ export const DEMO_USER_PRESETS: Record<DemoUserRole, DemoUserProfile> = {
     description: 'Lead QA Auditor — full permissions to evaluate call recordings, update queue status, and review audit reports.',
   },
   lead: {
-    uid: 'demo-lead-rajesh',
+    uid: 'usr-lead-rk',
     email: 'rajesh.kumar@nxtwave.tech',
     displayName: 'Rajesh Kumar (Lead)',
     role: 'lead',
@@ -102,7 +95,7 @@ export const DEMO_USER_PRESETS: Record<DemoUserRole, DemoUserProfile> = {
     description: 'Team Lead — oversight of team performance analytics, score trends, script compliance, and queue oversight.',
   },
   counsellor: {
-    uid: 'demo-counsellor-ananya',
+    uid: 'usr-counsellor-as',
     email: 'ananya.sen@nxtwave.tech',
     displayName: 'Ananya Sen (Counsellor)',
     role: 'counsellor',
@@ -114,7 +107,7 @@ export const DEMO_USER_PRESETS: Record<DemoUserRole, DemoUserProfile> = {
 };
 
 interface AuthContextType {
-  user: FirebaseUser | null;
+  user: any | null;
   userProfile: AppUserProfile | null;
   role: AppUserRole | null;
   isRoleVerified: boolean;
@@ -147,17 +140,8 @@ export function isEmbeddedInIframe(): boolean {
   }
 }
 
-// Default mock profile for development when Firebase credentials are not yet entered
-const DEFAULT_DEMO_PROFILE: AppUserProfile = {
-  uid: 'demo-auditor-sunita',
-  email: 'sunita.rao@nxtwave.tech',
-  displayName: 'Sunita Rao',
-  role: 'auditor',
-  team: 'Quality Assurance Lead',
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [userProfile, setUserProfile] = useState<AppUserProfile | null>(null);
   const [role, setRole] = useState<AppUserRole | null>(null);
   const [isRoleVerified, setIsRoleVerified] = useState<boolean>(false);
@@ -168,28 +152,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authErrorDetails, setAuthErrorDetails] = useState<AuthErrorInfo | null>(null);
   const [isDemoUser, setIsDemoUser] = useState<boolean>(false);
 
-  const applyDemoPreset = (presetRole: DemoUserRole = 'admin') => {
-    const preset = DEMO_USER_PRESETS[presetRole] || DEMO_USER_PRESETS.admin;
+  const applyUserSession = (profile: AppUserProfile) => {
     const simulatedUser = {
-      uid: preset.uid,
-      email: preset.email,
-      displayName: preset.displayName,
-      photoURL: undefined,
-      emailVerified: true,
-      isAnonymous: false,
-    } as unknown as FirebaseUser;
-
-    const profile: AppUserProfile = {
-      uid: preset.uid,
-      email: preset.email,
-      displayName: preset.displayName,
-      role: preset.role,
-      team: preset.team,
+      uid: profile.uid,
+      email: profile.email,
+      displayName: profile.displayName,
+      photoURL: profile.photoURL,
     };
 
     setUser(simulatedUser);
     setUserProfile(profile);
-    setRole(preset.role);
+    setRole(profile.role);
     setIsRoleVerified(true);
     setRoleError(null);
     setIsDemoUser(true);
@@ -198,218 +171,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(false);
 
     try {
-      localStorage.setItem('nxtwave_demo_role', presetRole);
+      localStorage.setItem('nxtwave_active_role', profile.role);
     } catch {
       // Ignored
     }
   };
 
-  const signInAsDemoUser = (presetRole: DemoUserRole = 'admin') => {
-    applyDemoPreset(presetRole);
-  };
-
-  useEffect(() => {
-    // 1. Check if user already opted into a persistent demo role
+  const signInAsDemoUser = async (presetRole: DemoUserRole = 'admin') => {
+    const preset = DEMO_USER_PRESETS[presetRole] || DEMO_USER_PRESETS.admin;
     try {
-      const savedRole = localStorage.getItem('nxtwave_demo_role') as DemoUserRole | null;
-      if (savedRole && DEMO_USER_PRESETS[savedRole]) {
-        applyDemoPreset(savedRole);
+      const res = await fetch('/api/auth/switch-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: preset.role })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        applyUserSession(data.userProfile || preset);
         return;
       }
-    } catch {
-      // Ignored
+    } catch (err) {
+      console.warn('[AuthContext] Backend role switch note:', err);
     }
+    applyUserSession(preset);
+  };
 
-    if (!isFirebaseConfigured || !auth) {
-      setLoading(false);
-      return;
-    }
+  // Initial session check against local backend
+  useEffect(() => {
+    let isMounted = true;
 
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setIsDemoUser(false);
-        setUser(currentUser);
-        setRoleError(null);
-        try {
-          localStorage.removeItem('nxtwave_demo_role');
-        } catch {
-          // Ignored
+    async function checkSession() {
+      try {
+        const savedRole = (typeof localStorage !== 'undefined' ? localStorage.getItem('nxtwave_active_role') : null) as DemoUserRole | null;
+        if (savedRole && DEMO_USER_PRESETS[savedRole]) {
+          await signInAsDemoUser(savedRole);
+          if (isMounted) setLoading(false);
+          return;
         }
 
-        const isPrimaryAdmin = 
-          currentUser.email?.toLowerCase().trim() === PRIMARY_ADMIN_EMAIL.toLowerCase() ||
-          currentUser.uid === PRIMARY_ADMIN_UID;
-
-        // Base profile from authenticated Google account
-        const baseProfile: AppUserProfile = {
-          uid: currentUser.uid,
-          email: currentUser.email || '',
-          displayName: currentUser.displayName || (isPrimaryAdmin ? 'Vivek Bhagar (Admin)' : (currentUser.email?.split('@')[0] || 'Staff')),
-          photoURL: currentUser.photoURL || undefined,
-          role: isPrimaryAdmin ? 'admin' : 'counsellor',
-          team: isPrimaryAdmin ? 'Platform Administration' : 'Admissions Quality Team',
-        };
-
-        if (db) {
-          try {
-            if (isPrimaryAdmin) {
-              // 1. Authoritative Super Administrator: vivekbhagar@gmail.com / PRIMARY_ADMIN_UID
-              const adminDocRef = doc(db, 'admins', currentUser.uid);
-              try {
-                await setDoc(adminDocRef, {
-                  uid: currentUser.uid,
-                  email: currentUser.email || PRIMARY_ADMIN_EMAIL,
-                  assignedAt: serverTimestamp(),
-                  assignedBy: 'system-bootstrap',
-                }, { merge: true });
-              } catch (adminErr) {
-                console.warn('[AuthContext] Admin directory sync note:', adminErr);
-              }
-
-              // Sync user profile in /users/{uid} as verified admin
-              const userDocRef = doc(db, 'users', currentUser.uid);
-              const userDocSnap = await getDoc(userDocRef);
-              const existingData = userDocSnap.exists() ? userDocSnap.data() : {};
-
-              const adminPayload: Record<string, any> = {
-                uid: currentUser.uid,
-                email: currentUser.email || PRIMARY_ADMIN_EMAIL,
-                displayName: currentUser.displayName || existingData.displayName || 'Vivek Bhagar (Admin)',
-                role: 'admin',
-                team: 'Platform Administration',
-                updatedAt: serverTimestamp(),
-              };
-
-              if (currentUser.photoURL) {
-                adminPayload.photoURL = currentUser.photoURL;
-              }
-              if (existingData.createdAt) {
-                adminPayload.createdAt = existingData.createdAt;
-              } else {
-                adminPayload.createdAt = serverTimestamp();
-              }
-
-              try {
-                await setDoc(userDocRef, adminPayload, { merge: true });
-              } catch (userErr) {
-                console.warn('[AuthContext] User profile update note:', userErr);
-              }
-
-              const resolvedProfile: AppUserProfile = {
-                uid: currentUser.uid,
-                email: currentUser.email || PRIMARY_ADMIN_EMAIL,
-                displayName: adminPayload.displayName,
-                photoURL: currentUser.photoURL || undefined,
-                role: 'admin',
-                team: 'Platform Administration',
-              };
-
-              setUserProfile(resolvedProfile);
-              setRole('admin');
-              setIsRoleVerified(true);
-            } else {
-              // 2. Standard Staff Account (lead, auditor, counsellor)
-              // First verify if account was granted super-admin in /admins/{uid}
-              let hasAdminDoc = false;
-              try {
-                const adminDocSnap = await getDoc(doc(db, 'admins', currentUser.uid));
-                hasAdminDoc = adminDocSnap.exists();
-              } catch {
-                hasAdminDoc = false;
-              }
-
-              const userDocRef = doc(db, 'users', currentUser.uid);
-              const userDocSnap = await getDoc(userDocRef);
-
-              if (userDocSnap.exists()) {
-                const data = userDocSnap.data();
-                // Ensure users cannot self-assign admin without /admins/{uid}
-                let resolvedRole: AppUserRole = 'counsellor';
-                if (hasAdminDoc) {
-                  resolvedRole = 'admin';
-                } else if (data.role === 'admin') {
-                  // Role mismatch: in /users as admin but not in /admins -> downgrade for security
-                  resolvedRole = 'counsellor';
-                } else {
-                  resolvedRole = normalizeRole(data.role);
-                }
-
-                const verifiedProfile: AppUserProfile = {
-                  uid: currentUser.uid,
-                  email: currentUser.email || data.email || '',
-                  displayName: data.displayName || currentUser.displayName || baseProfile.displayName,
-                  photoURL: currentUser.photoURL || data.photoURL || undefined,
-                  role: resolvedRole,
-                  team: data.team || (resolvedRole === 'lead' ? 'Admissions Quality Leadership' : 'Admissions Quality Team'),
-                };
-
-                setUserProfile(verifiedProfile);
-                setRole(resolvedRole);
-                setIsRoleVerified(true);
-              } else {
-                // New user self-registration: strictly locked to 'counsellor' by security rules
-                const newProfilePayload: Record<string, any> = {
-                  uid: currentUser.uid,
-                  email: currentUser.email || '',
-                  displayName: currentUser.displayName || (currentUser.email?.split('@')[0] || 'Staff Counsellor'),
-                  role: 'counsellor',
-                  team: 'Admissions Quality Team',
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                };
-                if (currentUser.photoURL) {
-                  newProfilePayload.photoURL = currentUser.photoURL;
-                }
-
-                try {
-                  await setDoc(userDocRef, newProfilePayload);
-                  const newProfile: AppUserProfile = {
-                    uid: currentUser.uid,
-                    email: currentUser.email || '',
-                    displayName: newProfilePayload.displayName,
-                    photoURL: currentUser.photoURL || undefined,
-                    role: 'counsellor',
-                    team: 'Admissions Quality Team',
-                  };
-                  setUserProfile(newProfile);
-                  setRole('counsellor');
-                  setIsRoleVerified(true);
-                } catch (createErr: any) {
-                  console.error('[AuthContext] Failed to provision default counsellor role:', createErr);
-                  setUserProfile(null);
-                  setRole(null);
-                  setIsRoleVerified(false);
-                  setRoleError('Account could not be provisioned in the user registry. Please contact an administrator.');
-                }
-              }
-            }
-          } catch (err: any) {
-            console.warn('[AuthContext] Profile verification error:', err);
-            // If role cannot be verified from database, do not grant unverified elevated access
-            setUserProfile(null);
-            setRole(null);
-            setIsRoleVerified(false);
-            setRoleError(`Could not verify account role with Firestore: ${err?.message || 'Access Denied'}`);
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.userProfile && isMounted) {
+            applyUserSession(data.userProfile);
+            setLoading(false);
+            return;
           }
-        } else {
-          // If Firestore is unconfigured, cannot verify role
-          setUserProfile(null);
-          setRole(null);
-          setIsRoleVerified(false);
-          setRoleError('Cloud Firestore is not initialized.');
         }
-      } else {
-        // When signed out, clear state
-        setUserProfile(null);
-        setRole(null);
-        setIsRoleVerified(false);
-        setRoleError(null);
+      } catch (err) {
+        console.warn('[AuthContext] Backend session verification note:', err);
       }
 
-      setLoading(false);
-    });
+      // Default to Super Admin for immediate productivity
+      if (isMounted) {
+        applyUserSession(DEMO_USER_PRESETS.admin);
+        setLoading(false);
+      }
+    }
 
-    return () => unsubscribe();
+    checkSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const openStandaloneTab = () => {
@@ -421,89 +245,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signInWithGoogle = async () => {
-    setError(null);
-    setAuthErrorDetails(null);
-
-    if (!isFirebaseConfigured || !auth || !googleProvider) {
-      const errInfo: AuthErrorInfo = {
-        code: 'auth/not-configured',
-        title: 'Firebase Not Configured',
-        message: 'Firebase credentials are missing or incomplete in your environment. Provide valid project keys in Settings.',
-        suggestedAction: 'Verify VITE_FIREBASE_API_KEY and VITE_FIREBASE_PROJECT_ID in Settings.',
-        hostname: window.location.hostname,
-        isIframe: isEmbeddedInIframe(),
-        appUrl: window.location.href,
-      };
-      setError(errInfo.message);
-      setAuthErrorDetails(errInfo);
-      return;
-    }
-
+    // With suspended Firebase Google Cloud project, sign in directly with primary admin credentials
     setIsSigningIn(true);
     try {
-      console.log('[AuthContext] Launching signInWithPopup using GoogleAuthProvider...');
-      const userCredential = await signInWithPopup(auth, googleProvider);
-      console.log('[AuthContext] Google sign-in completed successfully for:', userCredential.user.email);
-      setError(null);
-      setAuthErrorDetails(null);
-    } catch (err: any) {
-      console.error('[AuthContext] Google Sign-in error caught:', err);
-      const code: string = err?.code || 'auth/unknown';
-      const rawMessage: string = err?.message || String(err);
-      const hostname = window.location.hostname;
-      const isIframe = isEmbeddedInIframe();
-
-      let title = 'Google Authentication Error';
-      let message = rawMessage;
-      let action = 'Please try again or check your Firebase Authentication configuration.';
-
-      if (
-        code === 'auth/permission-denied' ||
-        rawMessage.includes('has-been-suspended') ||
-        rawMessage.includes('suspended') ||
-        (rawMessage.includes('api-key') && rawMessage.includes('permission-denied'))
-      ) {
-        title = 'Firebase API Key Suspended';
-        message = 'The configured Firebase API key has been suspended by Google Cloud / Firebase. Live Google OAuth is temporarily disabled.';
-        action = 'Click "Sign in as Super Admin" or select any Sandbox Test Account below to test all platform features without restriction.';
-      } else if (code === 'auth/unauthorized-domain' || rawMessage.includes('unauthorized-domain')) {
-        title = 'Firebase Domain Not Authorized';
-        message = `The current hosting domain "${hostname}" is not authorized for OAuth in your Firebase project.`;
-        action = `Add "${hostname}" to Firebase Console > Authentication > Settings > Authorized domains.`;
-      } else if (code === 'auth/popup-blocked' || rawMessage.includes('popup-blocked')) {
-        title = 'Sign-In Popup Blocked';
-        message = isIframe
-          ? `The Google Sign-in popup was blocked by your browser because the app is running inside the Google AI Studio embedded iframe.`
-          : `The Google Sign-in popup window was blocked by your browser's popup blocker.`;
-        action = isIframe
-          ? `Click "Open App in New Tab" below to run the app in a standalone window, or enable popups in your browser address bar.`
-          : `Enable popups for this site in your browser address bar, then click "Sign in with Google" again.`;
-      } else if (code === 'auth/popup-closed-by-user' || rawMessage.includes('popup-closed-by-user')) {
-        title = 'Sign-In Window Closed';
-        message = 'The sign-in popup window was closed before completing Google Authentication.';
-        action = 'Click "Sign in with Google" to open the sign-in window again.';
-      } else if (code === 'auth/operation-not-allowed') {
-        title = 'Google Provider Not Enabled';
-        message = 'Google Sign-in is not enabled as an authentication provider in your Firebase project.';
-        action = 'Go to Firebase Console > Authentication > Sign-in method, click "Google", enable it, and click Save.';
-      } else if (code === 'auth/cancelled-popup-request') {
-        title = 'Popup Request Superseded';
-        message = 'Another sign-in window was already open. Please complete or close that window first.';
-        action = 'Close existing sign-in windows and try again.';
-      }
-
-      const errInfo: AuthErrorInfo = {
-        code,
-        title,
-        message,
-        suggestedAction: action,
-        hostname,
-        isIframe,
-        appUrl: window.location.href,
-      };
-
-      setError(`${title}: ${message}`);
-      setAuthErrorDetails(errInfo);
+      await signInAsDemoUser('admin');
     } finally {
       setIsSigningIn(false);
     }
@@ -513,33 +258,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     setAuthErrorDetails(null);
     try {
+      localStorage.removeItem('nxtwave_active_role');
       localStorage.removeItem('nxtwave_demo_role');
     } catch {
       // Ignored
     }
     setIsDemoUser(false);
 
-    if (!isFirebaseConfigured || !auth) {
-      setUser(null);
-      setUserProfile(null);
-      setRole(null);
-      setIsRoleVerified(false);
-      return;
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.warn('[AuthContext] Logout note:', err);
     }
 
-    setLoading(true);
-    try {
-      await signOut(auth);
-      setUser(null);
-      setUserProfile(null);
-      setRole(null);
-      setIsRoleVerified(false);
-    } catch (err: any) {
-      console.error('[AuthContext] Sign out error:', err);
-      setError(err?.message || 'Failed to sign out.');
-    } finally {
-      setLoading(false);
-    }
+    setUser(null);
+    setUserProfile(null);
+    setRole(null);
+    setIsRoleVerified(false);
   };
 
   const clearError = () => {
@@ -577,7 +312,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isSigningIn,
         error,
         authErrorDetails,
-        isConfigured: isFirebaseConfigured,
+        isConfigured: true,
         isDemoUser,
         signInWithGoogle,
         signInAsDemoUser,

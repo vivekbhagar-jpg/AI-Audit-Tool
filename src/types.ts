@@ -50,6 +50,7 @@ export interface AuditJob {
   id: string;
   recordingName: string;
   driveUrl: string;
+  audioPath?: string;
   counsellorName: string;
   counsellorEmpId: string;
   product: string;

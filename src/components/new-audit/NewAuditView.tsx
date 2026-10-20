@@ -29,7 +29,11 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   onAddJob,
   onNavigate
 }) => {
+  const [sourceType, setSourceType] = useState<'drive' | 'upload'>('drive');
   const [driveUrl, setDriveUrl] = useState('');
+  const [uploadedAudioPath, setUploadedAudioPath] = useState('');
+  const [uploadedAudioName, setUploadedAudioName] = useState('');
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [product, setProduct] = useState<string>('Intensive');
   const [counsellorName, setCounsellorName] = useState('');
   const [counsellorEmpId, setCounsellorEmpId] = useState('');
@@ -41,6 +45,33 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   // Validation state
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [submittedJob, setSubmittedJob] = useState<AuditJob | null>(null);
+
+  const handleAudioUpload = async (file: File) => {
+    setIsUploadingAudio(true);
+    setErrors((prev) => ({ ...prev, driveUrl: '', audio: '' }));
+    try {
+      const formData = new FormData();
+      formData.append('audio', file);
+      const res = await fetch('/api/audio/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to upload audio recording.');
+      }
+
+      const result = await res.json();
+      setUploadedAudioPath(result.audioUrl);
+      setUploadedAudioName(result.originalname);
+      setDriveUrl(result.audioUrl);
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, audio: err.message || 'Audio upload failed' }));
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
 
   // Quick picker for counsellors
   const quickCounsellors = [
@@ -70,15 +101,21 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   const validate = () => {
     const newErrors: { [key: string]: string } = {};
 
-    if (!driveUrl.trim()) {
-      newErrors.driveUrl = 'Google Drive recording URL is required.';
+    if (sourceType === 'drive') {
+      if (!driveUrl.trim()) {
+        newErrors.driveUrl = 'Google Drive recording URL is required.';
+      } else {
+        const isDrive = driveUrl.includes('drive.google.com') || driveUrl.includes('docs.google.com');
+        const isValidUrl = driveUrl.startsWith('http://') || driveUrl.startsWith('https://');
+        if (!isValidUrl) {
+          newErrors.driveUrl = 'Please enter a valid URL starting with https://';
+        } else if (!isDrive) {
+          newErrors.driveUrl = 'URL must be a valid Google Drive file share link (drive.google.com).';
+        }
+      }
     } else {
-      const isDrive = driveUrl.includes('drive.google.com') || driveUrl.includes('docs.google.com');
-      const isValidUrl = driveUrl.startsWith('http://') || driveUrl.startsWith('https://');
-      if (!isValidUrl) {
-        newErrors.driveUrl = 'Please enter a valid URL starting with https://';
-      } else if (!isDrive) {
-        newErrors.driveUrl = 'URL must be a valid Google Drive file share link (drive.google.com).';
+      if (!uploadedAudioPath) {
+        newErrors.driveUrl = 'Please upload an audio file (.mp3, .wav, .m4a).';
       }
     }
 
@@ -106,13 +143,16 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
     e.preventDefault();
     if (!validate()) return;
 
-    // Extract filename from drive link or create a clean identifier
-    const recordingIdentifier = `NW_REC_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${counsellorName.replace(/\s+/g, '')}_Call.mp3`;
+    // Extract filename from uploaded audio or create a clean identifier
+    const recordingIdentifier = uploadedAudioName
+      ? uploadedAudioName
+      : `NW_REC_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${counsellorName.replace(/\s+/g, '')}_Call.mp3`;
 
     const newJob: AuditJob = {
       id: `job-nw-${Date.now().toString().slice(-4)}`,
       recordingName: recordingIdentifier,
-      driveUrl: driveUrl.trim(),
+      driveUrl: sourceType === 'drive' ? driveUrl.trim() : uploadedAudioPath,
+      audioPath: uploadedAudioPath || undefined,
       counsellorName: counsellorName.trim(),
       counsellorEmpId: counsellorEmpId.trim().toUpperCase(),
       product,
