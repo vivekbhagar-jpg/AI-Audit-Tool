@@ -1,0 +1,278 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------
+    // 0. Global Safety Net: Default-deny all unmapped paths
+    // -------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------
+    // Global Helper Primitives
+    // -------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Primary administrator check:
+    // Requires verified UID in /admins collection, authoritative primary UID, or authoritative email vivekbhagar@gmail.com
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.uid == 'D9G89blBpVVvMtd0xkg6LBmmf7o1' ||
+        ('email' in request.auth.token && (
+          request.auth.token.email == 'vivekbhagar@gmail.com' ||
+          request.auth.token.email.lower() == 'vivekbhagar@gmail.com'
+        ))
+      );
+    }
+
+    // Auditor/Lead requires explicit assignment by an administrator
+    function isAuditor() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['auditor', 'lead', 'admin'])
+      );
+    }
+
+    // -------------------------------------------------------------
+    // Entity 0: /admins/{adminId}
+    // Explicit Super-Administrator Directory
+    // -------------------------------------------------------------
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (isOwner(adminId) || isAdmin());
+      allow list: if isSignedIn() && isAdmin();
+      // Administrators can only be provisioned by primary administrator or existing admin
+      allow create, update: if isSignedIn() && isAdmin() && isValidId(adminId) &&
+                               incoming().keys().hasAll(['uid']) &&
+                               incoming().uid == adminId;
+      allow delete: if isSignedIn() && isAdmin() && isValidId(adminId) && request.auth.uid != adminId;
+    }
+
+    // -------------------------------------------------------------
+    // Entity 1: /users/{userId}
+    // User Directory with Strict Role Elevation Gates
+    // -------------------------------------------------------------
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'team', 'createdAt', 'updatedAt']) &&
+             data.uid is string && data.uid.size() <= 128 && data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 256 &&
+             data.role in ['admin', 'auditor', 'lead', 'counsellor'];
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAuditor());
+      allow list: if isAuditor();
+
+      // Standard user self-registration is strictly locked to 'counsellor'
+      // Elevated roles ('auditor', 'lead', 'admin') can ONLY be provisioned by an admin
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        (isOwner(userId) && incoming().role == 'counsellor') ||
+        isAdmin()
+      );
+
+      // Users can only update their own display name, photo, and team;
+      // Role modifications and email edits require administrator privileges
+      allow update: if isSignedIn() && isValidId(userId) && (
+        (isOwner(userId) && isValidUser(incoming()) &&
+         incoming().role == existing().role &&
+         incoming().uid == existing().uid &&
+         incoming().email == existing().email &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'team', 'updatedAt'])) ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 2: /knowledge_sources/{docId}
+    // Approved Sales Pitch, Pricing Matrix, and Syllabus Reference
+    // -------------------------------------------------------------
+    function isValidKnowledgeSource(data) {
+      return data.keys().hasAll(['id', 'title', 'category', 'product', 'version', 'status']) &&
+             data.keys().hasOnly([
+               'id', 'title', 'category', 'product', 'stage', 'callStage', 'version', 'status',
+               'lastUpdated', 'fileSize', 'fileType', 'summary', 'clausesCount',
+               'clauses', 'prohibitedClaims', 'approvedPitchNotes', 'fullContentSnippet',
+               'storageUrl', 'processingStatus', 'uploaderUid', 'uploadTimestamp',
+               'createdBy', 'createdAt', 'updatedAt'
+             ]) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 256 &&
+             data.category in ['Narratives', 'Product Knowledge', 'Pricing and Policies', 'Audit Rubrics'] &&
+             data.product is string && data.product.size() > 0 && data.product.size() <= 128 &&
+             data.version is string && data.version.size() > 0 && data.version.size() <= 32 &&
+             data.status in ['Active', 'Draft', 'Archived'];
+    }
+
+    match /knowledge_sources/{docId} {
+      // Approved knowledge base policy documents are readable across refresh and sign-out
+      allow get: if isValidId(docId);
+      allow list: if true;
+
+      // Only verified administrator (or authorized lead auditor) can publish policies
+      allow create: if isSignedIn() && isValidId(docId) && isValidKnowledgeSource(incoming()) &&
+                       (isAdmin() || isAuditor()) &&
+                       incoming().createdBy == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(docId) && isValidKnowledgeSource(incoming()) &&
+                       (isAdmin() || isAuditor() || incoming().createdBy == request.auth.uid) &&
+                       incoming().id == existing().id &&
+                       (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy) &&
+                       (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 3: /audit_rubrics/{rubricId}
+    // 8-Factor Quality QA Scoring Rubric Configuration
+    // -------------------------------------------------------------
+    function isValidAuditRubric(data) {
+      return data.keys().hasAll(['id', 'name', 'version', 'weights']) &&
+             data.keys().hasOnly([
+               'id', 'name', 'version', 'weights', 'isDefault',
+               'zeroToleranceRules', 'updatedBy', 'updatedAt'
+             ]) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 128 &&
+             data.version is string && data.version.size() <= 32;
+    }
+
+    match /audit_rubrics/{rubricId} {
+      allow get: if isSignedIn() && isValidId(rubricId);
+      allow list: if isSignedIn();
+
+      // Modifying organization-wide rubric weights is restricted to QA auditors/leads/admins
+      allow create, update: if isAuditor() && isValidId(rubricId) && isValidAuditRubric(incoming()) &&
+                               (!('id' in existing()) || incoming().id == existing().id);
+      allow delete: if isAdmin() && isValidId(rubricId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 4: /audit_jobs/{jobId}
+    // Call Ingestion & Audit Lifecycle Queue
+    // -------------------------------------------------------------
+    function isValidAuditJob(data) {
+      return data.keys().hasAll(['id', 'recordingName', 'driveUrl', 'counsellorName', 'counsellorEmpId', 'product', 'status']) &&
+             data.keys().hasOnly([
+               'id', 'recordingName', 'driveUrl', 'counsellorName', 'counsellorEmpId',
+               'product', 'language', 'stage', 'duration', 'submittedAt', 'status',
+               'progress', 'score', 'criticalViolationCount', 'isSample', 'submittedBy',
+               'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.recordingName is string && data.recordingName.size() <= 256 &&
+             data.driveUrl is string && data.driveUrl.size() <= 1024 &&
+             data.counsellorName is string && data.counsellorName.size() <= 128 &&
+             data.counsellorEmpId is string && data.counsellorEmpId.size() <= 32 &&
+             data.product is string && data.product.size() <= 128 &&
+             data.status in ['Queued', 'Transcribing', 'Auditing', 'Needs Review', 'Completed', 'Failed'];
+    }
+
+    match /audit_jobs/{jobId} {
+      // Restrict reading of audit jobs to auditors/admins or the submitting user
+      allow get: if isSignedIn() && isValidId(jobId) && (
+        isAuditor() ||
+        resource.data.submittedBy == request.auth.uid
+      );
+      // Listing requires being an auditor or filtering by submittedBy == request.auth.uid
+      allow list: if isSignedIn() && (
+        isAuditor() ||
+        resource.data.submittedBy == request.auth.uid
+      );
+
+      // Authenticated users can enqueue a recording (strictly Queued), while admins can seed or create jobs
+      allow create: if isSignedIn() && isValidId(jobId) && isValidAuditJob(incoming()) && (
+        isAdmin() || (
+          incoming().status == 'Queued' &&
+          incoming().progress == 0 &&
+          incoming().submittedBy == request.auth.uid &&
+          (!('score' in incoming()) || incoming().score == null)
+        )
+      );
+
+      // Only authorized QA auditors/admins can update job processing status, progress, and scores
+      allow update: if isAuditor() && isValidId(jobId) && isValidAuditJob(incoming()) &&
+                       incoming().id == existing().id &&
+                       incoming().driveUrl == existing().driveUrl &&
+                       incoming().submittedAt == existing().submittedAt &&
+                       incoming().submittedBy == existing().submittedBy;
+
+      allow delete: if isAdmin() && isValidId(jobId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 5: /transcripts/{transcriptId}
+    // Sensitive Audio Transcripts & Speaker Turns
+    // -------------------------------------------------------------
+    match /transcripts/{transcriptId} {
+      allow get: if isAuditor() && isValidId(transcriptId);
+      allow list: if isAuditor();
+      allow create, update: if isAuditor() && isValidId(transcriptId);
+      allow delete: if isAdmin() && isValidId(transcriptId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 6: /audit_results/{resultId}
+    // Generated Audit Scorecards, Violation Evidence & Coaching Plans
+    // -------------------------------------------------------------
+    match /audit_results/{resultId} {
+      allow get: if isSignedIn() && isValidId(resultId) && (
+        isAuditor() || 
+        resource.data.counsellorEmail == request.auth.token.email
+      );
+      allow list: if isAuditor();
+      allow create, update: if isAuditor() && isValidId(resultId);
+      allow delete: if isAdmin() && isValidId(resultId);
+    }
+
+    // -------------------------------------------------------------
+    // Entity 7: /audit_reviews/{reviewId}
+    // Human Auditor Reviewer Comments, Score Overrides & Sign-Offs
+    // -------------------------------------------------------------
+    function isValidAuditReview(data) {
+      return data.keys().hasAll(['id', 'jobId', 'auditorId', 'finalScore', 'status']) &&
+             data.keys().hasOnly([
+               'id', 'jobId', 'reportId', 'auditorId', 'auditorName', 'auditorEmail',
+               'originalScore', 'finalScore', 'overrideReason', 'notes', 'status',
+               'signedAt', 'createdAt'
+             ]) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.jobId is string && data.jobId.size() <= 128 &&
+             data.auditorId is string && data.auditorId == request.auth.uid &&
+             data.finalScore is number && data.finalScore >= 0 && data.finalScore <= 100 &&
+             data.status in ['Draft', 'Approved', 'Score Overridden', 'Sent for Retraining'];
+    }
+
+    match /audit_reviews/{reviewId} {
+      allow get: if isAuditor() && isValidId(reviewId);
+      allow list: if isAuditor();
+      allow create: if isAuditor() && isValidId(reviewId) && isValidAuditReview(incoming());
+      allow update: if isAuditor() && isValidId(reviewId) && isValidAuditReview(incoming()) &&
+                       incoming().id == existing().id &&
+                       incoming().jobId == existing().jobId &&
+                       (incoming().auditorId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() && isValidId(reviewId);
+    }
+  }
+}

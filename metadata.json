@@ -1,0 +1,6 @@
+{
+  "name": "NxtWave AI Audit",
+  "description": "Enterprise quality assurance platform for auditing counselling call recordings against approved narratives, product knowledge, and pricing policies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

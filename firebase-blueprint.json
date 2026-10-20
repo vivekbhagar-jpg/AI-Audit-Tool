@@ -1,0 +1,183 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Enterprise QA user profile with assigned role and regional team.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["admin", "auditor", "lead", "counsellor"] },
+        "team": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "KnowledgeSource": {
+      "title": "KnowledgeSource",
+      "description": "Approved narrative script, pricing matrix, syllabus, or compliance manual document.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "category": { "type": "string", "enum": ["Narratives", "Product Knowledge", "Pricing and Policies", "Audit Rubrics"] },
+        "product": { "type": "string", "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 32 },
+        "lastUpdated": { "type": "string" },
+        "fileSize": { "type": "string", "maxLength": 32 },
+        "fileType": { "type": "string", "enum": ["pdf", "docx", "txt"] },
+        "status": { "type": "string", "enum": ["Active", "Draft", "Archived"] },
+        "summary": { "type": "string", "maxLength": 4096 },
+        "clausesCount": { "type": "number" },
+        "clauses": { "type": "array" },
+        "prohibitedClaims": { "type": "array" },
+        "approvedPitchNotes": { "type": "array" },
+        "fullContentSnippet": { "type": "string", "maxLength": 65536 },
+        "storageUrl": { "type": "string", "maxLength": 2048 },
+        "processingStatus": { "type": "string", "maxLength": 64 },
+        "uploaderUid": { "type": "string", "maxLength": 128 },
+        "uploadTimestamp": { "type": "string" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "category", "product", "version", "status"]
+    },
+    "AuditRubric": {
+      "title": "AuditRubric",
+      "description": "Scoring rubric weights and zero-tolerance policy triggers.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 32 },
+        "isDefault": { "type": "boolean" },
+        "weights": { "type": "object" },
+        "zeroToleranceRules": { "type": "array" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "version", "weights"]
+    },
+    "AuditJob": {
+      "title": "AuditJob",
+      "description": "Recorded call submitted for speech transcription and compliance audit.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "recordingName": { "type": "string", "maxLength": 256 },
+        "driveUrl": { "type": "string", "maxLength": 1024 },
+        "counsellorName": { "type": "string", "maxLength": 128 },
+        "counsellorEmpId": { "type": "string", "maxLength": 32 },
+        "product": { "type": "string", "maxLength": 128 },
+        "language": { "type": "string", "maxLength": 64 },
+        "stage": { "type": "string", "maxLength": 128 },
+        "duration": { "type": "string", "maxLength": 32 },
+        "submittedAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["Queued", "Transcribing", "Auditing", "Needs Review", "Completed", "Failed"] },
+        "progress": { "type": "number" },
+        "score": { "type": "number" },
+        "criticalViolationCount": { "type": "number" },
+        "isSample": { "type": "boolean" },
+        "submittedBy": { "type": "string", "maxLength": 128 },
+        "notes": { "type": "string", "maxLength": 2048 }
+      },
+      "required": ["id", "recordingName", "driveUrl", "counsellorName", "counsellorEmpId", "product", "status"]
+    },
+    "Transcript": {
+      "title": "Transcript",
+      "description": "Diarized speech-to-text turns with speaker labels and timestamps.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "turns": { "type": "array" },
+        "language": { "type": "string", "maxLength": 64 },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "jobId", "turns"]
+    },
+    "AuditResult": {
+      "title": "AuditResult",
+      "description": "Generated compliance scorecard, findings, and coaching recommendations.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "counsellorName": { "type": "string", "maxLength": 128 },
+        "counsellorEmpId": { "type": "string", "maxLength": 32 },
+        "team": { "type": "string", "maxLength": 128 },
+        "product": { "type": "string", "maxLength": 128 },
+        "language": { "type": "string", "maxLength": 64 },
+        "overallScore": { "type": "number" },
+        "maxScore": { "type": "number" },
+        "complianceTier": { "type": "string", "enum": ["Exemplary", "Compliant", "Needs Coaching", "Critical Non-Compliant"] },
+        "criteriaBreakdown": { "type": "array" },
+        "findings": { "type": "array" },
+        "missingNarratives": { "type": "array" },
+        "unsupportedClaims": { "type": "array" },
+        "criticalViolations": { "type": "array" },
+        "coachingRecommendations": { "type": "array" },
+        "generatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "jobId", "overallScore", "complianceTier"]
+    },
+    "AuditReview": {
+      "title": "AuditReview",
+      "description": "Human reviewer sign-off, notes, and score override record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "reportId": { "type": "string", "maxLength": 128 },
+        "auditorId": { "type": "string", "maxLength": 128 },
+        "auditorName": { "type": "string", "maxLength": 128 },
+        "auditorEmail": { "type": "string", "maxLength": 256 },
+        "originalScore": { "type": "number" },
+        "finalScore": { "type": "number" },
+        "overrideReason": { "type": "string", "maxLength": 1024 },
+        "notes": { "type": "string", "maxLength": 4096 },
+        "status": { "type": "string", "enum": ["Draft", "Approved", "Score Overridden", "Sent for Retraining"] },
+        "signedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "jobId", "auditorId", "finalScore", "status"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "User" },
+      "description": "Authoritative super-administrator directory."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "User profiles with auditor/manager roles."
+    },
+    "/knowledge_sources/{docId}": {
+      "schema": { "$ref": "KnowledgeSource" },
+      "description": "Approved knowledge base documents, narratives, and rubrics."
+    },
+    "/audit_rubrics/{rubricId}": {
+      "schema": { "$ref": "AuditRubric" },
+      "description": "Configurable audit rubric criteria and weights."
+    },
+    "/audit_jobs/{jobId}": {
+      "schema": { "$ref": "AuditJob" },
+      "description": "Call recording audit jobs in the ingestion and processing queue."
+    },
+    "/transcripts/{transcriptId}": {
+      "schema": { "$ref": "Transcript" },
+      "description": "Speech transcripts for audited call recordings."
+    },
+    "/audit_results/{resultId}": {
+      "schema": { "$ref": "AuditResult" },
+      "description": "Evaluation scores, compliance findings, and coaching reports."
+    },
+    "/audit_reviews/{reviewId}": {
+      "schema": { "$ref": "AuditReview" },
+      "description": "Human auditor sign-off, comments, and score override logs."
+    }
+  }
+}
