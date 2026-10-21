@@ -63,6 +63,8 @@ export interface AuditJob {
   score?: number;
   criticalViolationCount: number;
   isSample: boolean;
+  team?: string;
+  assignedAuditor?: string;
   notes?: string;
 }
 

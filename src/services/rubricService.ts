@@ -6,6 +6,8 @@
  * Connects to local Express + SQLite API (/api/rubrics).
  */
 
+import { apiFetch } from '../lib/api';
+
 export interface RubricWeightsConfig {
   greeting: number;
   needAnalysis: number;
@@ -33,7 +35,7 @@ export const DEFAULT_RUBRIC_WEIGHTS: RubricWeightsConfig = {
  */
 export async function getRubricWeights(): Promise<{ weights: RubricWeightsConfig; fromFirestore: boolean }> {
   try {
-    const res = await fetch('/api/rubrics');
+    const res = await apiFetch('/api/rubrics');
     if (res.ok) {
       const data = await res.json();
       if (data.weights) {
@@ -51,7 +53,7 @@ export async function getRubricWeights(): Promise<{ weights: RubricWeightsConfig
  * Save updated rubric weights via backend API
  */
 export async function saveRubricWeights(weights: RubricWeightsConfig): Promise<void> {
-  const res = await fetch('/api/rubrics', {
+  const res = await apiFetch('/api/rubrics', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ weights })

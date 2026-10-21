@@ -7,25 +7,23 @@
  */
 
 import { AuditJob, AuditJobStatus } from '../types';
-import { INITIAL_AUDIT_JOBS } from '../data/sampleData';
 import { isValidProductStage, getStagesForProduct } from '../config/callStages';
+import { apiFetch } from '../lib/api';
 
 export interface GetAuditJobsOptions {
-  fallbackToDemo?: boolean;
+  includeSamples?: boolean;
 }
 
 /**
- * Fetch all audit jobs from backend API (/api/jobs)
+ * Fetch all audit jobs from backend API (/api/jobs).
+ * Does not fall back to fake operational jobs.
  */
 export async function getAuditJobs(
   options: GetAuditJobsOptions = {}
 ): Promise<{ jobs: AuditJob[]; fromFirestore: boolean }> {
-  if (options.fallbackToDemo) {
-    return { jobs: INITIAL_AUDIT_JOBS, fromFirestore: false };
-  }
-
   try {
-    const res = await fetch('/api/jobs');
+    const query = options.includeSamples ? '?include_samples=true' : '';
+    const res = await apiFetch(`/api/jobs${query}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.jobs)) {
@@ -33,10 +31,10 @@ export async function getAuditJobs(
       }
     }
   } catch (error) {
-    console.warn('[AuditJobService] Failed to load jobs from API, using fallback:', error);
+    console.warn('[AuditJobService] Failed to load jobs from API:', error);
   }
 
-  return { jobs: INITIAL_AUDIT_JOBS, fromFirestore: false };
+  return { jobs: [], fromFirestore: true };
 }
 
 /**
@@ -52,7 +50,7 @@ export async function createAuditJobInDb(newJob: AuditJob): Promise<void> {
     throw new Error(`Invalid Call Stage "${newJob.stage}" for product "${newJob.product}". Valid stages are: ${allowed.join(', ')}`);
   }
 
-  const res = await fetch('/api/jobs', {
+  const res = await apiFetch('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(newJob)
@@ -75,7 +73,7 @@ export async function updateAuditJobStatusInDb(
   criticalViolationCount?: number,
   notes?: string
 ): Promise<void> {
-  const res = await fetch(`/api/jobs/${jobId}/status`, {
+  const res = await apiFetch(`/api/jobs/${jobId}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -97,7 +95,7 @@ export async function updateAuditJobStatusInDb(
  * Delete an audit job
  */
 export async function deleteAuditJobFromDb(jobId: string): Promise<void> {
-  const res = await fetch(`/api/jobs/${jobId}`, {
+  const res = await apiFetch(`/api/jobs/${jobId}`, {
     method: 'DELETE'
   });
 
@@ -105,16 +103,4 @@ export async function deleteAuditJobFromDb(jobId: string): Promise<void> {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.error || 'Failed to delete audit job.');
   }
-}
-
-/**
- * Seed initial sample audit jobs
- */
-export async function seedAuditJobsToFirestore(): Promise<number> {
-  let count = 0;
-  for (const job of INITIAL_AUDIT_JOBS) {
-    await createAuditJobInDb(job);
-    count++;
-  }
-  return count;
 }

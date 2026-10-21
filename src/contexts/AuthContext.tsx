@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * Enterprise Authentication & RBAC Context for NxtWave AI Audit Platform
- * Connects to local Node.js/Express + SQLite backend (/api/auth) with resilient role-based access control.
+ * Connects to local Node.js/Express + SQLite backend (/api/auth) with secure
+ * HTTP-only cookie sessions, bcrypt verification, and CSRF protection.
  */
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 
 export const PRIMARY_ADMIN_EMAIL = 'vivekbhagar@gmail.com';
 export const PRIMARY_ADMIN_UID = 'usr-admin-vb';
 
-export function normalizeRole(role?: string | null): 'admin' | 'auditor' | 'lead' | 'counsellor' {
+export type AppUserRole = 'admin' | 'lead' | 'auditor' | 'counsellor';
+
+export function normalizeRole(role?: string | null): AppUserRole {
   if (!role) return 'counsellor';
   const clean = role.trim().toLowerCase();
   if (clean === 'admin' || clean === 'administrator' || clean === 'super_admin') return 'admin';
@@ -33,85 +36,21 @@ export interface AppUserProfile {
   email: string;
   displayName: string;
   photoURL?: string;
-  role: 'admin' | 'auditor' | 'lead' | 'counsellor';
+  role: AppUserRole;
   team: string;
-  createdAt?: any;
-  updatedAt?: any;
 }
 
 export interface AuthErrorInfo {
   code: string;
   title: string;
   message: string;
-  suggestedAction?: string;
-  hostname: string;
-  isIframe: boolean;
-  appUrl: string;
 }
-
-export type AppUserRole = 'admin' | 'lead' | 'auditor' | 'counsellor';
-export type DemoUserRole = 'admin' | 'auditor' | 'lead' | 'counsellor';
-
-export interface DemoUserProfile {
-  uid: string;
-  email: string;
-  displayName: string;
-  role: DemoUserRole;
-  team: string;
-  avatarLetter: string;
-  badgeClass: string;
-  description: string;
-}
-
-export const DEMO_USER_PRESETS: Record<DemoUserRole, DemoUserProfile> = {
-  admin: {
-    uid: PRIMARY_ADMIN_UID,
-    email: PRIMARY_ADMIN_EMAIL,
-    displayName: 'Vivek Bhagar (Admin)',
-    role: 'admin',
-    team: 'Platform Administration',
-    avatarLetter: 'VB',
-    badgeClass: 'bg-purple-100 text-purple-800 border-purple-200',
-    description: 'Super Administrator — unrestricted access to all audit operations, knowledge base, policies, and system settings.',
-  },
-  auditor: {
-    uid: 'usr-auditor-sr',
-    email: 'sunita.rao@nxtwave.tech',
-    displayName: 'Sunita Rao (Auditor)',
-    role: 'auditor',
-    team: 'Quality Assurance Lead',
-    avatarLetter: 'SR',
-    badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
-    description: 'Lead QA Auditor — full permissions to evaluate call recordings, update queue status, and review audit reports.',
-  },
-  lead: {
-    uid: 'usr-lead-rk',
-    email: 'rajesh.kumar@nxtwave.tech',
-    displayName: 'Rajesh Kumar (Lead)',
-    role: 'lead',
-    team: 'Admissions Quality Lead',
-    avatarLetter: 'RK',
-    badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-    description: 'Team Lead — oversight of team performance analytics, score trends, script compliance, and queue oversight.',
-  },
-  counsellor: {
-    uid: 'usr-counsellor-as',
-    email: 'ananya.sen@nxtwave.tech',
-    displayName: 'Ananya Sen (Counsellor)',
-    role: 'counsellor',
-    team: 'Admissions Counselling',
-    avatarLetter: 'AS',
-    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-    description: 'Academic Counsellor — access to personal call audit evaluations, compliance coaching notes, and knowledge base.',
-  },
-};
 
 interface AuthContextType {
-  user: any | null;
+  user: AppUserProfile | null;
   userProfile: AppUserProfile | null;
   role: AppUserRole | null;
   isRoleVerified: boolean;
-  roleError: string | null;
   isAdmin: boolean;
   isLead: boolean;
   isAuditor: boolean;
@@ -121,12 +60,13 @@ interface AuthContextType {
   error: string | null;
   authErrorDetails: AuthErrorInfo | null;
   isConfigured: boolean;
-  isDemoUser: boolean;
-  signInWithGoogle: () => Promise<void>;
-  signInAsDemoUser: (role?: DemoUserRole) => void;
+  adminConfigured: boolean;
+  csrfToken: string | null;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  setupAdmin: (password: string, email?: string) => Promise<{ success: boolean; error?: string }>;
   signOutUser: () => Promise<void>;
   clearError: () => void;
-  openStandaloneTab: () => void;
+  refreshSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -141,114 +81,159 @@ export function isEmbeddedInIframe(): boolean {
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<any | null>(null);
   const [userProfile, setUserProfile] = useState<AppUserProfile | null>(null);
   const [role, setRole] = useState<AppUserRole | null>(null);
   const [isRoleVerified, setIsRoleVerified] = useState<boolean>(false);
-  const [roleError, setRoleError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [authErrorDetails, setAuthErrorDetails] = useState<AuthErrorInfo | null>(null);
-  const [isDemoUser, setIsDemoUser] = useState<boolean>(false);
+  const [adminConfigured, setAdminConfigured] = useState<boolean>(true);
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
 
-  const applyUserSession = (profile: AppUserProfile) => {
-    const simulatedUser = {
-      uid: profile.uid,
-      email: profile.email,
-      displayName: profile.displayName,
-      photoURL: profile.photoURL,
-    };
-
-    setUser(simulatedUser);
-    setUserProfile(profile);
-    setRole(profile.role);
-    setIsRoleVerified(true);
-    setRoleError(null);
-    setIsDemoUser(true);
-    setError(null);
-    setAuthErrorDetails(null);
-    setLoading(false);
-
+  // Check setup status (whether an admin password has been initialized)
+  const checkSetupStatus = useCallback(async () => {
     try {
-      localStorage.setItem('nxtwave_active_role', profile.role);
+      const res = await fetch('/api/auth/setup-status');
+      if (res.ok) {
+        const data = await res.json();
+        setAdminConfigured(Boolean(data.adminConfigured));
+      }
     } catch {
       // Ignored
     }
-  };
-
-  const signInAsDemoUser = async (presetRole: DemoUserRole = 'admin') => {
-    const preset = DEMO_USER_PRESETS[presetRole] || DEMO_USER_PRESETS.admin;
-    try {
-      const res = await fetch('/api/auth/switch-role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: preset.role })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        applyUserSession(data.userProfile || preset);
-        return;
-      }
-    } catch (err) {
-      console.warn('[AuthContext] Backend role switch note:', err);
-    }
-    applyUserSession(preset);
-  };
-
-  // Initial session check against local backend
-  useEffect(() => {
-    let isMounted = true;
-
-    async function checkSession() {
-      try {
-        const savedRole = (typeof localStorage !== 'undefined' ? localStorage.getItem('nxtwave_active_role') : null) as DemoUserRole | null;
-        if (savedRole && DEMO_USER_PRESETS[savedRole]) {
-          await signInAsDemoUser(savedRole);
-          if (isMounted) setLoading(false);
-          return;
-        }
-
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.userProfile && isMounted) {
-            applyUserSession(data.userProfile);
-            setLoading(false);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('[AuthContext] Backend session verification note:', err);
-      }
-
-      // Default to Super Admin for immediate productivity
-      if (isMounted) {
-        applyUserSession(DEMO_USER_PRESETS.admin);
-        setLoading(false);
-      }
-    }
-
-    checkSession();
-
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
-  const openStandaloneTab = () => {
+  // Initial session check against local backend
+  const refreshSession = useCallback(async () => {
     try {
-      window.open(window.location.href, '_blank', 'noopener,noreferrer');
-    } catch {
-      window.location.assign(window.location.href);
+      await checkSetupStatus();
+      const res = await fetch('/api/auth/me');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.userProfile) {
+          const profile: AppUserProfile = {
+            uid: data.userProfile.uid || data.userProfile.id,
+            email: data.userProfile.email,
+            displayName: data.userProfile.displayName || data.userProfile.display_name,
+            role: normalizeRole(data.userProfile.role),
+            team: data.userProfile.team,
+          };
+          setUserProfile(profile);
+          setRole(profile.role);
+          setIsRoleVerified(true);
+          setCsrfToken(data.csrfToken || null);
+          setError(null);
+          setAuthErrorDetails(null);
+          return;
+        }
+      }
+      // No active session
+      setUserProfile(null);
+      setRole(null);
+      setIsRoleVerified(false);
+      setCsrfToken(null);
+    } catch (err: any) {
+      console.warn('[AuthContext] Session verification note:', err);
+      setUserProfile(null);
+      setRole(null);
+      setIsRoleVerified(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [checkSetupStatus]);
+
+  useEffect(() => {
+    refreshSession();
+  }, [refreshSession]);
+
+  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    setIsSigningIn(true);
+    setError(null);
+    setAuthErrorDetails(null);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        const errMsg = data.error || 'Invalid email or password.';
+        setError(errMsg);
+        setAuthErrorDetails({
+          code: 'AUTH_FAILED',
+          title: 'Sign In Failed',
+          message: errMsg,
+        });
+        return { success: false, error: errMsg };
+      }
+
+      if (data.userProfile) {
+        const profile: AppUserProfile = {
+          uid: data.userProfile.uid,
+          email: data.userProfile.email,
+          displayName: data.userProfile.displayName,
+          role: normalizeRole(data.userProfile.role),
+          team: data.userProfile.team,
+        };
+        setUserProfile(profile);
+        setRole(profile.role);
+        setIsRoleVerified(true);
+        setCsrfToken(data.csrfToken || null);
+        return { success: true };
+      }
+
+      return { success: false, error: 'User profile not received.' };
+    } catch (err: any) {
+      const msg = err?.message || 'Network error during authentication.';
+      setError(msg);
+      return { success: false, error: msg };
+    } finally {
+      setIsSigningIn(false);
     }
   };
 
-  const signInWithGoogle = async () => {
-    // With suspended Firebase Google Cloud project, sign in directly with primary admin credentials
+  const setupAdmin = async (password: string, email?: string): Promise<{ success: boolean; error?: string }> => {
     setIsSigningIn(true);
+    setError(null);
     try {
-      await signInAsDemoUser('admin');
+      const res = await fetch('/api/auth/setup-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, email })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        const errMsg = data.error || 'Failed to initialize administrator password.';
+        setError(errMsg);
+        return { success: false, error: errMsg };
+      }
+
+      setAdminConfigured(true);
+      if (data.userProfile) {
+        const profile: AppUserProfile = {
+          uid: data.userProfile.uid,
+          email: data.userProfile.email,
+          displayName: data.userProfile.displayName,
+          role: 'admin',
+          team: data.userProfile.team,
+        };
+        setUserProfile(profile);
+        setRole('admin');
+        setIsRoleVerified(true);
+        setCsrfToken(data.csrfToken || null);
+        return { success: true };
+      }
+      return { success: true };
+    } catch (err: any) {
+      const msg = err?.message || 'Error configuring administrator password.';
+      setError(msg);
+      return { success: false, error: msg };
     } finally {
       setIsSigningIn(false);
     }
@@ -258,23 +243,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     setAuthErrorDetails(null);
     try {
-      localStorage.removeItem('nxtwave_active_role');
-      localStorage.removeItem('nxtwave_demo_role');
+      await fetch('/api/auth/logout', { method: 'POST' });
     } catch {
       // Ignored
     }
-    setIsDemoUser(false);
-
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-    } catch (err) {
-      console.warn('[AuthContext] Logout note:', err);
-    }
-
-    setUser(null);
     setUserProfile(null);
     setRole(null);
     setIsRoleVerified(false);
+    setCsrfToken(null);
   };
 
   const clearError = () => {
@@ -282,48 +258,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthErrorDetails(null);
   };
 
-  // Authoritative role resolution:
-  const effectiveRole = userProfile?.role || role || null;
-  const isAdmin = user 
-    ? (
-        user.email?.toLowerCase().trim() === PRIMARY_ADMIN_EMAIL.toLowerCase() ||
-        user.uid === PRIMARY_ADMIN_UID ||
-        effectiveRole === 'admin'
-      )
-    : false;
+  const value: AuthContextType = {
+    user: userProfile,
+    userProfile,
+    role,
+    isRoleVerified,
+    isAdmin: role === 'admin',
+    isLead: role === 'lead' || role === 'admin',
+    isAuditor: role === 'auditor' || role === 'admin',
+    isCounsellor: role === 'counsellor' || role === 'admin' || role === 'lead',
+    loading,
+    isSigningIn,
+    error,
+    authErrorDetails,
+    isConfigured: true,
+    adminConfigured,
+    csrfToken,
+    login,
+    setupAdmin,
+    signOutUser,
+    clearError,
+    refreshSession,
+  };
 
-  const isLead = isAdmin || effectiveRole === 'lead';
-  const isAuditor = isAdmin || isLead || effectiveRole === 'auditor';
-  const isCounsellor = effectiveRole === 'counsellor';
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        userProfile,
-        role: effectiveRole,
-        isRoleVerified,
-        roleError,
-        isAdmin,
-        isLead,
-        isAuditor,
-        isCounsellor,
-        loading,
-        isSigningIn,
-        error,
-        authErrorDetails,
-        isConfigured: true,
-        isDemoUser,
-        signInWithGoogle,
-        signInAsDemoUser,
-        signOutUser,
-        clearError,
-        openStandaloneTab,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {

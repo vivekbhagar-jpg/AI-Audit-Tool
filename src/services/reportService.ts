@@ -7,41 +7,44 @@
  */
 
 import { AuditReport, ReviewerReview } from '../types';
-import { getAuditReportForJob, SAMPLE_AUDIT_REPORT_PRIMARY } from '../data/sampleData';
+import { apiFetch } from '../lib/api';
 
 export interface GetReportOptions {
-  fallbackToDemo?: boolean;
+  includeSamples?: boolean;
 }
 
 /**
- * Fetch audit report result for a job via backend API
+ * Fetch audit report result for a job via backend API.
+ * Never returns a demo fallback when real report is missing.
  */
 export async function getAuditReport(
   jobId: string,
-  options: GetReportOptions = {}
+  _options: GetReportOptions = {}
 ): Promise<{ report: AuditReport | null; fromFirestore: boolean }> {
   try {
-    const res = await fetch(`/api/reports/${jobId}`);
+    const res = await apiFetch(`/api/reports/${jobId}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.report) {
-        return { report: data.report, fromFirestore: true };
-      }
+      return { report: data.report || null, fromFirestore: true };
+    }
+    if (res.status === 404) {
+      return { report: null, fromFirestore: true };
     }
   } catch (error) {
-    console.warn('[ReportService] Error reading report from API, using fallback:', error);
+    console.warn('[ReportService] Error reading report from API:', error);
   }
 
-  const demoReport = getAuditReportForJob(jobId) || SAMPLE_AUDIT_REPORT_PRIMARY;
-  return { report: demoReport, fromFirestore: false };
+  return { report: null, fromFirestore: true };
 }
 
 /**
- * Fetch all audit reports via backend API
+ * Fetch all audit reports via backend API.
+ * Excludes sample reports unless explicitly requested.
  */
-export async function getAllAuditReports(): Promise<AuditReport[]> {
+export async function getAllAuditReports(includeSamples: boolean = false): Promise<AuditReport[]> {
   try {
-    const res = await fetch('/api/reports');
+    const query = includeSamples ? '?include_samples=true' : '';
+    const res = await apiFetch(`/api/reports${query}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.reports)) {
@@ -51,18 +54,19 @@ export async function getAllAuditReports(): Promise<AuditReport[]> {
   } catch (error) {
     console.warn('[ReportService] Error fetching all reports:', error);
   }
-  return [SAMPLE_AUDIT_REPORT_PRIMARY];
+  return [];
 }
 
 /**
- * Save human auditor sign-off, comments, and score override via backend API
+ * Save human auditor sign-off, comments, and score override via backend API.
+ * Protected by CSRF token and auditor/admin role check on server.
  */
 export async function saveAuditorReviewToDb(
   jobId: string,
-  reportId: string,
+  _reportId: string,
   review: ReviewerReview
 ): Promise<void> {
-  const res = await fetch(`/api/reports/${jobId}/review`, {
+  const res = await apiFetch(`/api/reports/${jobId}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(review)
@@ -72,11 +76,4 @@ export async function saveAuditorReviewToDb(
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.error || 'Failed to save auditor review.');
   }
-}
-
-/**
- * Seed initial sample audit report
- */
-export async function seedPrimaryReportToFirestore(): Promise<void> {
-  // SQLite database seeds this on boot automatically
 }

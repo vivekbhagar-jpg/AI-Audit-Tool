@@ -19,6 +19,7 @@ import {
   BookOpen,
   Link2
 } from 'lucide-react';
+import { apiFetch } from '../../lib/api';
 
 interface NewAuditViewProps {
   onAddJob: (job: AuditJob) => void;
@@ -29,11 +30,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   onAddJob,
   onNavigate
 }) => {
-  const [sourceType, setSourceType] = useState<'drive' | 'upload'>('drive');
   const [driveUrl, setDriveUrl] = useState('');
-  const [uploadedAudioPath, setUploadedAudioPath] = useState('');
-  const [uploadedAudioName, setUploadedAudioName] = useState('');
-  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [product, setProduct] = useState<string>('Intensive');
   const [counsellorName, setCounsellorName] = useState('');
   const [counsellorEmpId, setCounsellorEmpId] = useState('');
@@ -46,76 +43,18 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [submittedJob, setSubmittedJob] = useState<AuditJob | null>(null);
 
-  const handleAudioUpload = async (file: File) => {
-    setIsUploadingAudio(true);
-    setErrors((prev) => ({ ...prev, driveUrl: '', audio: '' }));
-    try {
-      const formData = new FormData();
-      formData.append('audio', file);
-      const res = await fetch('/api/audio/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to upload audio recording.');
-      }
-
-      const result = await res.json();
-      setUploadedAudioPath(result.audioUrl);
-      setUploadedAudioName(result.originalname);
-      setDriveUrl(result.audioUrl);
-    } catch (err: any) {
-      setErrors((prev) => ({ ...prev, audio: err.message || 'Audio upload failed' }));
-    } finally {
-      setIsUploadingAudio(false);
-    }
-  };
-
-  // Quick picker for counsellors
-  const quickCounsellors = [
-    { name: 'Rahul Verma', empId: 'NW-4091' },
-    { name: 'Pooja Sharma', empId: 'NW-3820' },
-    { name: 'Karthik Reddy', empId: 'NW-4215' },
-    { name: 'Sneha Roy', empId: 'NW-3950' },
-    { name: 'Vikas Gupta', empId: 'NW-4310' },
-    { name: 'Aditya Nair', empId: 'NW-4402' }
-  ];
-
-  const handleSelectQuickCounsellor = (c: { name: string; empId: string }) => {
-    setCounsellorName(c.name);
-    setCounsellorEmpId(c.empId);
-    if (errors.counsellor) {
-      setErrors((prev) => ({ ...prev, counsellor: '', empId: '' }));
-    }
-  };
-
-  const handleUseSampleDriveUrl = () => {
-    setDriveUrl('https://drive.google.com/file/d/1A8b9qKxLmNoPqRsTuVwXyZ12345/view?usp=sharing');
-    if (errors.driveUrl) {
-      setErrors((prev) => ({ ...prev, driveUrl: '' }));
-    }
-  };
-
   const validate = () => {
     const newErrors: { [key: string]: string } = {};
 
-    if (sourceType === 'drive') {
-      if (!driveUrl.trim()) {
-        newErrors.driveUrl = 'Google Drive recording URL is required.';
-      } else {
-        const isDrive = driveUrl.includes('drive.google.com') || driveUrl.includes('docs.google.com');
-        const isValidUrl = driveUrl.startsWith('http://') || driveUrl.startsWith('https://');
-        if (!isValidUrl) {
-          newErrors.driveUrl = 'Please enter a valid URL starting with https://';
-        } else if (!isDrive) {
-          newErrors.driveUrl = 'URL must be a valid Google Drive file share link (drive.google.com).';
-        }
-      }
+    if (!driveUrl.trim()) {
+      newErrors.driveUrl = 'Google Drive recording URL is required.';
     } else {
-      if (!uploadedAudioPath) {
-        newErrors.driveUrl = 'Please upload an audio file (.mp3, .wav, .m4a).';
+      const isDrive = driveUrl.includes('drive.google.com') || driveUrl.includes('docs.google.com');
+      const isValidUrl = driveUrl.startsWith('http://') || driveUrl.startsWith('https://');
+      if (!isValidUrl) {
+        newErrors.driveUrl = 'Please enter a valid URL starting with https://';
+      } else if (!isDrive) {
+        newErrors.driveUrl = 'URL must be a valid Google Drive file share link (drive.google.com).';
       }
     }
 
@@ -124,7 +63,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
     }
 
     if (!counsellorEmpId.trim()) {
-      newErrors.empId = 'Employee ID is required (e.g. NW-4091).';
+      newErrors.empId = 'Employee ID is required (e.g. NW-1001).';
     }
 
     if (!product || !product.trim()) {
@@ -143,16 +82,12 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
     e.preventDefault();
     if (!validate()) return;
 
-    // Extract filename from uploaded audio or create a clean identifier
-    const recordingIdentifier = uploadedAudioName
-      ? uploadedAudioName
-      : `NW_REC_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${counsellorName.replace(/\s+/g, '')}_Call.mp3`;
+    const recordingIdentifier = `NW_REC_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${counsellorName.trim().replace(/\s+/g, '')}_Call.mp3`;
 
     const newJob: AuditJob = {
       id: `job-nw-${Date.now().toString().slice(-4)}`,
       recordingName: recordingIdentifier,
-      driveUrl: sourceType === 'drive' ? driveUrl.trim() : uploadedAudioPath,
-      audioPath: uploadedAudioPath || undefined,
+      driveUrl: driveUrl.trim(),
       counsellorName: counsellorName.trim(),
       counsellorEmpId: counsellorEmpId.trim().toUpperCase(),
       product,
@@ -258,14 +193,6 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
                 <span>Google Drive Recording Link</span>
                 <span className="text-rose-600">*</span>
               </label>
-
-              <button
-                type="button"
-                onClick={handleUseSampleDriveUrl}
-                className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-              >
-                Paste Sample Drive Link
-              </button>
             </div>
 
             <div className="relative">
@@ -276,7 +203,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
                   setDriveUrl(e.target.value);
                   if (errors.driveUrl) setErrors((prev) => ({ ...prev, driveUrl: '' }));
                 }}
-                placeholder="https://drive.google.com/file/d/1A8b9qKxLmNoPqRsTuVwXyZ12345/view?usp=sharing"
+                placeholder="https://drive.google.com/file/d/YOUR_RECORDING_FILE_ID/view"
                 className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs font-mono focus:outline-none transition-colors ${
                   errors.driveUrl 
                     ? 'border-rose-400 focus:border-rose-500 bg-rose-50/30' 
@@ -291,7 +218,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
               </p>
             ) : (
               <p className="text-[11px] text-slate-500">
-                Ensure permissions are set to "Anyone with link can view" or shared with the NxtWave QA service account.
+                Authorized recordings are retrieved securely via Google Drive API. Link must be accessible to the connected Google account.
               </p>
             )}
           </div>
@@ -304,25 +231,6 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
                 <span>Counsellor Information</span>
                 <span className="text-rose-600">*</span>
               </label>
-              <span className="text-[11px] text-slate-500">Quick select from active roster:</span>
-            </div>
-
-            {/* Quick Picker chips */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {quickCounsellors.map((c) => (
-                <button
-                  type="button"
-                  key={c.empId}
-                  onClick={() => handleSelectQuickCounsellor(c)}
-                  className={`px-2.5 py-1 text-xs rounded-lg border transition-colors cursor-pointer ${
-                    counsellorEmpId === c.empId
-                      ? 'bg-slate-900 text-white border-slate-900 font-semibold'
-                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  {c.name} ({c.empId})
-                </button>
-              ))}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -335,7 +243,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
                     setCounsellorName(e.target.value);
                     if (errors.counsellor) setErrors((prev) => ({ ...prev, counsellor: '' }));
                   }}
-                  placeholder="e.g. Rahul Verma"
+                  placeholder="Enter counsellor name"
                   className={`w-full px-3 py-2 bg-white border rounded-lg text-xs focus:outline-none ${
                     errors.counsellor ? 'border-rose-400 bg-rose-50/30' : 'border-slate-300 focus:border-slate-600'
                   }`}
@@ -354,7 +262,7 @@ export const NewAuditView: React.FC<NewAuditViewProps> = ({
                     setCounsellorEmpId(e.target.value);
                     if (errors.empId) setErrors((prev) => ({ ...prev, empId: '' }));
                   }}
-                  placeholder="e.g. NW-4091"
+                  placeholder="e.g. NW-1001"
                   className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-mono uppercase focus:outline-none ${
                     errors.empId ? 'border-rose-400 bg-rose-50/30' : 'border-slate-300 focus:border-slate-600'
                   }`}

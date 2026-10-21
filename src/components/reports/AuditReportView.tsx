@@ -1,13 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   AuditReport, 
   ReviewerReview, 
   CriterionScore, 
   AuditFinding 
 } from '../../types';
-import { 
-  SAMPLE_AUDIT_REPORT_PRIMARY 
-} from '../../data/sampleData';
 import { 
   ShieldCheck, 
   AlertTriangle, 
@@ -44,7 +41,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
   onBackToQueue,
   onReviewSaved
 }) => {
-  const { userProfile, isConfigured, isAdmin, isAuditor } = useAuth();
+  const { userProfile, isAdmin, isAuditor } = useAuth();
   const canReview = isAdmin || isAuditor;
   const [activeTab, setActiveTab] = useState<'scorecard' | 'transcript' | 'findings' | 'coaching' | 'reviewer'>('scorecard');
   const [showEnglishTranslation, setShowEnglishTranslation] = useState<boolean>(true);
@@ -55,7 +52,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
     currentReport?.reviewerReview?.notes || ''
   );
   const [overrideScore, setOverrideScore] = useState<number>(
-    currentReport?.reviewerReview?.finalScore || currentReport?.overallScore || 0
+    currentReport?.reviewerReview?.finalScore ?? currentReport?.overallScore ?? 0
   );
   const [overrideReason, setOverrideReason] = useState<string>(
     currentReport?.reviewerReview?.overrideReason || ''
@@ -66,6 +63,15 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
   const [isSavedFeedback, setIsSavedFeedback] = useState<boolean>(false);
   const [isSavingReview, setIsSavingReview] = useState<boolean>(false);
   const [actionToast, setActionToast] = useState<{ message: string; type?: 'info' | 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (currentReport) {
+      setReviewerNotes(currentReport.reviewerReview?.notes || '');
+      setOverrideScore(currentReport.reviewerReview?.finalScore ?? currentReport.overallScore ?? 0);
+      setOverrideReason(currentReport.reviewerReview?.overrideReason || '');
+      setReviewStatus(currentReport.reviewerReview?.status || 'Approved');
+    }
+  }, [currentReport]);
 
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'success') => {
     setActionToast({ message, type });
@@ -126,13 +132,33 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
     );
   }
 
+  // Safe normalized fields to prevent any TypeError on undefined arrays
+  const criticalViolations = Array.isArray(currentReport.criticalViolations) ? currentReport.criticalViolations : [];
+  const unsupportedClaims = Array.isArray(currentReport.unsupportedClaims) ? currentReport.unsupportedClaims : [];
+  const missingNarratives = Array.isArray(currentReport.missingNarratives) ? currentReport.missingNarratives : [];
+  const coachingRecommendations = Array.isArray(currentReport.coachingRecommendations) ? currentReport.coachingRecommendations : [];
+  const criteriaBreakdown = Array.isArray(currentReport.criteriaBreakdown) 
+    ? currentReport.criteriaBreakdown 
+    : Array.isArray((currentReport as any).criteriaScores) 
+    ? (currentReport as any).criteriaScores 
+    : [];
+  const transcript = Array.isArray(currentReport.transcript) ? currentReport.transcript : [];
+  const reviewerReview = currentReport.reviewerReview || {
+    auditorName: userProfile?.displayName || 'Authorized Auditor',
+    auditorEmail: userProfile?.email || 'auditor@nxtwave.tech',
+    status: 'Approved',
+    originalScore: currentReport.overallScore ?? 0,
+    finalScore: currentReport.overallScore ?? 0,
+    notes: ''
+  };
+
   const handleSaveReview = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingReview(true);
 
     const reviewPayload: ReviewerReview = {
-      auditorName: userProfile?.displayName || currentReport.reviewerReview.auditorName,
-      auditorEmail: userProfile?.email || currentReport.reviewerReview.auditorEmail,
+      auditorName: userProfile?.displayName || reviewerReview.auditorName || 'Authorized Auditor',
+      auditorEmail: userProfile?.email || reviewerReview.auditorEmail || 'auditor@nxtwave.tech',
       status: reviewStatus,
       originalScore: currentReport.overallScore,
       finalScore: overrideScore,
@@ -142,9 +168,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
     };
 
     try {
-      if (isConfigured) {
-        await saveAuditorReviewToDb(currentReport.jobId, currentReport.id, reviewPayload);
-      }
+      await saveAuditorReviewToDb(currentReport.jobId, currentReport.id, reviewPayload);
       if (onReviewSaved) {
         onReviewSaved(currentReport.id, overrideScore);
       }
@@ -195,6 +219,19 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
         </div>
       </div>
 
+      {/* Sample / Calibration Report Notice */}
+      {currentReport.isSample && (
+        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2.5 text-xs text-amber-900 shadow-2xs">
+          <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+          <div>
+            <span className="font-bold uppercase tracking-wider text-[11px] text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded mr-1.5">
+              Sample Benchmark
+            </span>
+            <span>This is a calibration benchmark report. It is preserved for reference and does not represent an actual operational counselling call.</span>
+          </div>
+        </div>
+      )}
+
       {/* Main Header Card: Score & Metadata */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xs space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-100">
@@ -212,10 +249,10 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
                 <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${tier.color}`}>
                   {tier.text}
                 </span>
-                {currentReport.criticalViolations.length > 0 && (
+                {criticalViolations.length > 0 && (
                   <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3 text-rose-600" />
-                    <span>{currentReport.criticalViolations.length} Critical Violation</span>
+                    <span>{criticalViolations.length} Critical Violation</span>
                   </span>
                 )}
                 {overrideScore !== currentReport.overallScore && (
@@ -310,7 +347,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             <MessageSquare className="w-4 h-4 text-indigo-600" />
             <span>Diarized Transcript</span>
             <span className="text-[10px] font-mono bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded-full">
-              {currentReport.transcript.length} turns
+              {transcript.length} turns
             </span>
           </button>
 
@@ -325,7 +362,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             <AlertTriangle className="w-4 h-4 text-rose-600" />
             <span>Violations &amp; Evidence</span>
             <span className="text-[10px] font-mono bg-rose-100 text-rose-800 px-1.5 py-0.2 rounded-full font-bold">
-              {currentReport.criticalViolations.length + currentReport.unsupportedClaims.length}
+              {criticalViolations.length + unsupportedClaims.length}
             </span>
           </button>
 
@@ -340,7 +377,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             <Sparkles className="w-4 h-4 text-amber-600" />
             <span>Coaching Plan</span>
             <span className="text-[10px] font-mono bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded-full">
-              {currentReport.coachingRecommendations.length}
+              {coachingRecommendations.length}
             </span>
           </button>
 
@@ -373,7 +410,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {currentReport.criteriaBreakdown.map((criterion, idx) => {
+            {criteriaBreakdown.map((criterion: CriterionScore, idx: number) => {
               const isPass = criterion.status === 'pass';
               const isWarning = criterion.status === 'warning';
               const isFail = criterion.status === 'fail';
@@ -487,7 +524,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
 
           {/* Transcript Dialogue List */}
           <div className="space-y-4">
-            {currentReport.transcript
+            {transcript
               .filter(turn => transcriptFilter === 'all' || turn.highlightType)
               .map((turn) => {
                 const isCounsellor = turn.speaker === 'Counsellor';
@@ -568,7 +605,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             <div className="flex items-center gap-2 text-rose-900">
               <AlertTriangle className="w-5 h-5 text-rose-600" />
               <h3 className="text-base font-bold">
-                Critical Policy Violations ({currentReport.criticalViolations.length})
+                Critical Policy Violations ({criticalViolations.length})
               </h3>
             </div>
             <p className="text-xs text-rose-700">
@@ -576,24 +613,31 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             </p>
 
             <div className="space-y-3">
-              {currentReport.criticalViolations.map((v) => (
-                <div key={v.id} className="p-4 bg-rose-50/60 border border-rose-200 rounded-xl space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-rose-900">{v.title}</span>
-                    <span className="font-mono text-rose-700 font-semibold">Timestamp: {v.timestamp}</span>
-                  </div>
-                  <div className="p-2.5 bg-white border border-rose-200 rounded-lg font-mono text-rose-950 text-[11px]">
-                    {v.quote}
-                  </div>
-                  <p className="text-rose-900 leading-relaxed">
-                    <span className="font-semibold">Violation Rule: </span>{v.violationRule}
-                  </p>
-                  <div className="pt-2 border-t border-rose-200 flex items-center justify-between text-[11px] text-rose-800">
-                    <span>Reference Doc: <span className="font-semibold">{v.policyDoc}</span></span>
-                    <span className="font-semibold">Action: {v.zeroToleranceAction}</span>
-                  </div>
+              {criticalViolations.length === 0 ? (
+                <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>No critical zero-tolerance policy violations detected during this counselling call.</span>
                 </div>
-              ))}
+              ) : (
+                criticalViolations.map((v) => (
+                  <div key={v.id} className="p-4 bg-rose-50/60 border border-rose-200 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-rose-900">{v.title}</span>
+                      <span className="font-mono text-rose-700 font-semibold">Timestamp: {v.timestamp}</span>
+                    </div>
+                    <div className="p-2.5 bg-white border border-rose-200 rounded-lg font-mono text-rose-950 text-[11px]">
+                      {v.quote}
+                    </div>
+                    <p className="text-rose-900 leading-relaxed">
+                      <span className="font-semibold">Violation Rule: </span>{v.violationRule}
+                    </p>
+                    <div className="pt-2 border-t border-rose-200 flex items-center justify-between text-[11px] text-rose-800">
+                      <span>Reference Doc: <span className="font-semibold">{v.policyDoc}</span></span>
+                      <span className="font-semibold">Action: {v.zeroToleranceAction}</span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -607,29 +651,35 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
                 </p>
               </div>
               <span className="text-xs font-mono text-slate-500">
-                {currentReport.missingNarratives.length} items missed
+                {missingNarratives.length} items missed
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {currentReport.missingNarratives.map((mn) => (
-                <div key={mn.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-900">{mn.title}</span>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                      mn.importance === 'Mandatory' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {mn.importance}
-                    </span>
-                  </div>
-                  <p className="text-slate-600 text-[11px]">
-                    {mn.expectedTopic}
-                  </p>
-                  <p className="text-slate-500 text-[10px] italic">
-                    Impact: {mn.impactNote}
-                  </p>
+              {missingNarratives.length === 0 ? (
+                <div className="col-span-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
+                  All mandatory pitch elements and disclosures were covered.
                 </div>
-              ))}
+              ) : (
+                missingNarratives.map((mn) => (
+                  <div key={mn.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-900">{mn.title}</span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        mn.importance === 'Mandatory' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {mn.importance}
+                      </span>
+                    </div>
+                    <p className="text-slate-600 text-[11px]">
+                      {mn.expectedTopic}
+                    </p>
+                    <p className="text-slate-500 text-[10px] italic">
+                      Impact: {mn.impactNote}
+                    </p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -643,36 +693,42 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
             </div>
 
             <div className="divide-y divide-slate-100">
-              {currentReport.unsupportedClaims.map((uc) => (
-                <div key={uc.id} className="py-3.5 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-slate-500">Timestamp: {uc.timestamp}</span>
-                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      {uc.riskSeverity} Risk
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="p-2.5 bg-rose-50/50 border border-rose-100 rounded-lg">
-                      <span className="text-[10px] font-semibold text-rose-800 uppercase block mb-1">
-                        Claim Made on Call
-                      </span>
-                      <p className="text-rose-900">{uc.claimMade}</p>
-                    </div>
-
-                    <div className="p-2.5 bg-emerald-50/50 border border-emerald-100 rounded-lg">
-                      <span className="text-[10px] font-semibold text-emerald-800 uppercase block mb-1">
-                        Verified Policy Fact
-                      </span>
-                      <p className="text-emerald-900">{uc.actualPolicy}</p>
-                    </div>
-                  </div>
-
-                  <div className="text-[11px] text-slate-400">
-                    Source: {uc.referenceDoc}
-                  </div>
+              {unsupportedClaims.length === 0 ? (
+                <div className="py-4 text-xs text-slate-500">
+                  No unsupported claims or inaccurate statements found.
                 </div>
-              ))}
+              ) : (
+                unsupportedClaims.map((uc) => (
+                  <div key={uc.id} className="py-3.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-slate-500">Timestamp: {uc.timestamp}</span>
+                      <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        {uc.riskSeverity} Risk
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-2.5 bg-rose-50/50 border border-rose-100 rounded-lg">
+                        <span className="text-[10px] font-semibold text-rose-800 uppercase block mb-1">
+                          Claim Made on Call
+                        </span>
+                        <p className="text-rose-900">{uc.claimMade}</p>
+                      </div>
+
+                      <div className="p-2.5 bg-emerald-50/50 border border-emerald-100 rounded-lg">
+                        <span className="text-[10px] font-semibold text-emerald-800 uppercase block mb-1">
+                          Verified Policy Fact
+                        </span>
+                        <p className="text-emerald-900">{uc.actualPolicy}</p>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-400">
+                      Source: {uc.referenceDoc}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -691,37 +747,43 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
           </div>
 
           <div className="space-y-4">
-            {currentReport.coachingRecommendations.map((cr, idx) => (
-              <div key={cr.id} className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 font-bold text-slate-900">
-                    <span className="w-5 h-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px]">
-                      {idx + 1}
-                    </span>
-                    <span>{cr.area}</span>
-                  </div>
-                  <span className="text-[11px] font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                    {cr.trainingModule}
-                  </span>
-                </div>
-
-                <div className="space-y-1">
-                  <span className="text-[11px] font-semibold text-slate-600 uppercase block">
-                    Observed Problem:
-                  </span>
-                  <p className="text-slate-800">{cr.observedDeficiency}</p>
-                </div>
-
-                <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1">
-                  <span className="text-[11px] font-semibold text-emerald-700 uppercase block">
-                    Approved Replacement Script ("Say this instead"):
-                  </span>
-                  <p className="text-slate-900 italic font-medium leading-relaxed">
-                    {cr.recommendedPhrasing}
-                  </p>
-                </div>
+            {coachingRecommendations.length === 0 ? (
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
+                No specific coaching drills required for this call.
               </div>
-            ))}
+            ) : (
+              coachingRecommendations.map((cr, idx) => (
+                <div key={cr.id} className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-slate-900">
+                      <span className="w-5 h-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px]">
+                        {idx + 1}
+                      </span>
+                      <span>{cr.area}</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                      {cr.trainingModule}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-600 uppercase block">
+                      Observed Problem:
+                    </span>
+                    <p className="text-slate-800">{cr.observedDeficiency}</p>
+                  </div>
+
+                  <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1">
+                    <span className="text-[11px] font-semibold text-emerald-700 uppercase block">
+                      Approved Replacement Script ("Say this instead"):
+                    </span>
+                    <p className="text-slate-900 italic font-medium leading-relaxed">
+                      {cr.recommendedPhrasing}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -751,7 +813,7 @@ export const AuditReportView: React.FC<AuditReportViewProps> = ({
               <input
                 type="text"
                 disabled
-                value={currentReport.reviewerReview.auditorName}
+                value={reviewerReview.auditorName}
                 className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600"
               />
             </div>

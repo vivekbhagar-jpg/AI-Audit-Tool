@@ -12,11 +12,6 @@ import {
   DocStatus,
   AuditReport
 } from './types';
-import { 
-  INITIAL_KNOWLEDGE_DOCS, 
-  INITIAL_AUDIT_JOBS, 
-  SAMPLE_AUDIT_REPORT_PRIMARY 
-} from './data/sampleData';
 import { useAuth } from './contexts/AuthContext';
 import { 
   getKnowledgeSources, 
@@ -29,12 +24,10 @@ import {
 import { 
   getAuditJobs, 
   createAuditJobInDb, 
-  updateAuditJobStatusInDb,
-  seedAuditJobsToFirestore
+  updateAuditJobStatusInDb
 } from './services/auditJobService';
 import { 
-  getAuditReport, 
-  seedPrimaryReportToFirestore 
+  getAuditReport 
 } from './services/reportService';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
@@ -65,20 +58,15 @@ export default function App() {
   } = useAuth();
   
   const [currentScreen, setCurrentScreen] = useState<NavScreen>('dashboard');
-  
-  // Data mode: false = Live Firestore (production mode), true = Sample Demonstration mode
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
-  
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>([]);
   const [jobs, setJobs] = useState<AuditJob[]>([]);
-  const [selectedJobIdForReport, setSelectedJobIdForReport] = useState<string>('job-nw-8921');
+  const [selectedJobIdForReport, setSelectedJobIdForReport] = useState<string | null>(null);
   const [activeReport, setActiveReport] = useState<AuditReport | null>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
-  const [isFirestoreSource, setIsFirestoreSource] = useState<boolean>(false);
+  const [includeSamples, setIncludeSamples] = useState<boolean>(false);
 
   // Helper to determine if a screen is permitted for the verified role
   const isScreenAllowed = useCallback((screen: NavScreen): boolean => {
-    if (isDemoMode) return true;
     if (isAdmin) return true;
     if (isLead) {
       return ['dashboard', 'audit-queue', 'audit-reports', 'analytics', 'knowledge-base'].includes(screen);
@@ -90,33 +78,24 @@ export default function App() {
       return ['audit-queue', 'audit-reports', 'knowledge-base'].includes(screen);
     }
     return false;
-  }, [isAdmin, isLead, isAuditor, isCounsellor, isDemoMode]);
+  }, [isAdmin, isLead, isAuditor, isCounsellor]);
 
-  // Load data based on mode (Production Firestore vs Demo)
-  // CRITICAL: Only queries Firestore when the user is authenticated or in demo mode!
-  const refreshData = useCallback(async (demoMode: boolean) => {
+  // Load operational data from local SQLite database API
+  const refreshData = useCallback(async () => {
     setIsLoadingData(true);
     try {
-      if (demoMode) {
-        setKnowledgeDocs(INITIAL_KNOWLEDGE_DOCS);
-        setJobs(INITIAL_AUDIT_JOBS);
-        setActiveReport(SAMPLE_AUDIT_REPORT_PRIMARY);
-        setIsFirestoreSource(false);
-      } else {
-        const [docsRes, jobsRes] = await Promise.all([
-          getKnowledgeSources({ fallbackToDemo: false }),
-          getAuditJobs({ fallbackToDemo: false })
-        ]);
-        
-        setKnowledgeDocs(docsRes.docs);
-        setJobs(jobsRes.jobs);
-        setIsFirestoreSource(docsRes.fromFirestore || jobsRes.fromFirestore);
+      const [docsRes, jobsRes] = await Promise.all([
+        getKnowledgeSources(),
+        getAuditJobs({ includeSamples: false })
+      ]);
+      
+      setKnowledgeDocs(docsRes.docs);
+      setJobs(jobsRes.jobs);
 
-        // Fetch report for selected job if present
-        if (selectedJobIdForReport) {
-          const reportRes = await getAuditReport(selectedJobIdForReport, { fallbackToDemo: false });
-          setActiveReport(reportRes.report);
-        }
+      // Fetch report for selected job if present
+      if (selectedJobIdForReport) {
+        const reportRes = await getAuditReport(selectedJobIdForReport, { includeSamples: false });
+        setActiveReport(reportRes.report);
       }
     } catch (err) {
       console.warn('[App] Error refreshing data:', err);
@@ -125,12 +104,12 @@ export default function App() {
     }
   }, [selectedJobIdForReport]);
 
-  // Only refresh data when authenticated or explicitly previewing demo
+  // Refresh real data on load and when session changes
   useEffect(() => {
-    if (user || isDemoMode) {
-      refreshData(isDemoMode);
+    if (user) {
+      refreshData();
     }
-  }, [user, isConfigured, isDemoMode, refreshData]);
+  }, [user, refreshData]);
 
   // Direct user to their appropriate landing screen upon role verification
   useEffect(() => {
@@ -156,42 +135,34 @@ export default function App() {
     rawFile?: File,
     onProgress?: (info: UploadProgressInfo) => void
   ) => {
-    if (!isDemoMode && isConfigured) {
-      await createKnowledgeSource(newDoc, {
-        rawFile,
-        onProgress,
-        timeoutMs: 12000,
-      });
-    }
-    // Only update local state if Firestore write succeeds, avoiding duplicates on retry
+    await createKnowledgeSource(newDoc, {
+      rawFile,
+      onProgress,
+      timeoutMs: 12000,
+    });
+    // Only update local state if database write succeeds
     setKnowledgeDocs((prev) => [newDoc, ...prev.filter((d) => d.id !== newDoc.id)]);
   };
 
   const handleToggleDocStatus = async (docId: string, newStatus: DocStatus) => {
-    if (!isDemoMode && isConfigured) {
-      await updateKnowledgeSourceStatus(docId, newStatus);
-    }
+    await updateKnowledgeSourceStatus(docId, newStatus);
     setKnowledgeDocs((prev) =>
       prev.map((doc) => (doc.id === docId ? { ...doc, status: newStatus } : doc))
     );
   };
 
   const handleDeleteDoc = async (docId: string) => {
-    if (!isDemoMode && isConfigured) {
-      await deleteKnowledgeSource(docId);
-    }
+    await deleteKnowledgeSource(docId);
     setKnowledgeDocs((prev) => prev.filter((d) => d.id !== docId));
   };
 
   // Audit Job Handlers
   const handleAddJob = async (newJob: AuditJob) => {
     setJobs((prev) => [newJob, ...prev]);
-    if (!isDemoMode && isConfigured) {
-      try {
-        await createAuditJobInDb(newJob);
-      } catch (err) {
-        console.error('[App] Failed to persist audit job to Firestore:', err);
-      }
+    try {
+      await createAuditJobInDb(newJob);
+    } catch (err) {
+      console.error('[App] Failed to persist audit job to SQLite:', err);
     }
   };
 
@@ -209,12 +180,10 @@ export default function App() {
       })
     );
 
-    if (!isDemoMode && isConfigured) {
-      try {
-        await updateAuditJobStatusInDb(jobId, newStatus, progress);
-      } catch (err) {
-        console.error('[App] Failed to update job status in Firestore:', err);
-      }
+    try {
+      await updateAuditJobStatusInDb(jobId, newStatus, progress);
+    } catch (err) {
+      console.error('[App] Failed to update job status in SQLite:', err);
     }
   };
 
@@ -224,7 +193,7 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     try {
-      const res = await getAuditReport(jobId, { fallbackToDemo: isDemoMode });
+      const res = await getAuditReport(jobId, { includeSamples });
       setActiveReport(res.report);
     } catch (err) {
       console.warn('[App] Error fetching report for selected job:', err);
@@ -232,21 +201,11 @@ export default function App() {
     }
   };
 
-  const handleReviewSaved = (reportId: string, updatedScore: number) => {
+  const handleReviewSaved = (_reportId: string, updatedScore: number) => {
     // Sync the updated score into the job queue list
     setJobs((prev) =>
       prev.map((j) => (j.id === selectedJobIdForReport ? { ...j, score: updatedScore, status: 'Completed' } : j))
     );
-  };
-
-  const handleSeedSampleJobs = async () => {
-    await seedAuditJobsToFirestore();
-    try {
-      await seedPrimaryReportToFirestore();
-    } catch {
-      // Handled
-    }
-    await refreshData(false);
   };
 
   // 1. Loading state during Firebase Auth initialization
@@ -265,13 +224,13 @@ export default function App() {
     );
   }
 
-  // 2. Unauthenticated State: Show Login Screen (unless user explicitly previews demo)
-  if (!user && !isDemoMode) {
-    return <LoginView onEnterDemoMode={() => setIsDemoMode(true)} />;
+  // 2. Unauthenticated State: Show Login Screen
+  if (!user) {
+    return <LoginView />;
   }
 
   // 3. Authenticated but unverified role state
-  if (user && !isRoleVerified && !isDemoMode) {
+  if (user && !isRoleVerified) {
     return <UnauthorizedView />;
   }
 
@@ -282,8 +241,6 @@ export default function App() {
         currentScreen={currentScreen}
         onNavigate={setCurrentScreen}
         pendingQueueCount={pendingCount}
-        isDemoMode={isDemoMode}
-        onToggleDemoMode={() => setIsDemoMode((prev) => !prev)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -307,7 +264,6 @@ export default function App() {
               {currentScreen === 'dashboard' && (
                 <DashboardView
                   jobs={jobs}
-                  isDemoMode={isDemoMode}
                   onNavigate={setCurrentScreen}
                   onSelectJobForReport={handleSelectJobForReport}
                 />
@@ -319,7 +275,7 @@ export default function App() {
                   onAddDoc={handleAddDoc}
                   onToggleStatus={handleToggleDocStatus}
                   onDeleteDoc={handleDeleteDoc}
-                  onRefresh={() => refreshData(isDemoMode)}
+                  onRefresh={() => refreshData()}
                 />
               )}
 
@@ -334,10 +290,11 @@ export default function App() {
                 <AuditQueueView
                   jobs={jobs}
                   isLoading={isLoadingData}
+                  includeSamples={includeSamples}
+                  onToggleIncludeSamples={(include) => setIncludeSamples(include)}
                   onSelectJobForReport={handleSelectJobForReport}
                   onNavigate={setCurrentScreen}
                   onUpdateJobStatus={handleUpdateJobStatus}
-                  onSeedSampleJobs={handleSeedSampleJobs}
                 />
               )}
 
@@ -352,7 +309,6 @@ export default function App() {
               {currentScreen === 'analytics' && (
                 <AnalyticsView
                   jobs={jobs}
-                  isDemoMode={isDemoMode}
                 />
               )}
 

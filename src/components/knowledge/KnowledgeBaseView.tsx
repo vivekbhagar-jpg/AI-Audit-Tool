@@ -73,7 +73,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   onDeleteDoc,
   onRefresh,
 }) => {
-  const { user, isAdmin, signInWithGoogle } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedProduct, setSelectedProduct] = useState<string>('All');
   const [selectedStage, setSelectedStage] = useState<string>('All');
@@ -960,21 +960,13 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div className="leading-relaxed">
-                      <p className="font-semibold text-xs">Google Authentication Required by Security Rules</p>
+                      <p className="font-semibold text-xs">Administrator Authentication Required</p>
                       <p className="text-[11px] text-amber-700 mt-0.5">
-                        Cloud Firestore security rules strictly require an authenticated staff account to create policy documents.
-                        Please sign in with Google to enable persistent storage.
+                        Document upload and policy extraction require an authenticated administrator session.
+                        Please sign in through the login portal to upload new knowledge documents.
                       </p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => signInWithGoogle()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                  >
-                    <LogIn className="w-3.5 h-3.5" />
-                    <span>Sign in with Google Now</span>
-                  </button>
                 </div>
               )}
 

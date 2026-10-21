@@ -7,12 +7,12 @@
  */
 
 import { KnowledgeDoc, DocStatus, DocCategory } from '../types';
-import { INITIAL_KNOWLEDGE_DOCS } from '../data/sampleData';
 import { 
   isValidProductStage, 
   getStagesForProduct, 
   filterKnowledgeSourcesForAudit 
 } from '../config/callStages';
+import { apiFetch } from '../lib/api';
 
 const LOCAL_CACHE_KEY = 'nxtwave_persisted_knowledge_sources_v1';
 
@@ -89,16 +89,12 @@ function setLocalCache(docs: KnowledgeDoc[]): void {
  * Fetch all approved knowledge base documents from local backend API (/api/knowledge)
  */
 export async function getKnowledgeSources(
-  options: GetKnowledgeSourcesOptions = {}
+  _options: GetKnowledgeSourcesOptions = {}
 ): Promise<{ docs: KnowledgeDoc[]; fromFirestore: boolean }> {
-  if (options.fallbackToDemo) {
-    return { docs: INITIAL_KNOWLEDGE_DOCS, fromFirestore: false };
-  }
-
   const localCached = getLocalCache();
 
   try {
-    const res = await fetch('/api/knowledge');
+    const res = await apiFetch('/api/knowledge');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.docs)) {
@@ -110,8 +106,7 @@ export async function getKnowledgeSources(
     console.warn('[KnowledgeService] API fetch note, using local cache:', err.message);
   }
 
-  const fallbackDocs = localCached.length > 0 ? localCached : INITIAL_KNOWLEDGE_DOCS;
-  return { docs: fallbackDocs, fromFirestore: false };
+  return { docs: localCached, fromFirestore: false };
 }
 
 /**
@@ -148,7 +143,7 @@ export async function createKnowledgeSource(
     percent: 65,
   });
 
-  const res = await fetch('/api/knowledge', {
+  const res = await apiFetch('/api/knowledge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(newDoc)
@@ -193,7 +188,7 @@ export async function updateKnowledgeDocDetails(
     }
   }
 
-  const res = await fetch(`/api/knowledge/${docId}`, {
+  const res = await apiFetch(`/api/knowledge/${docId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates)
@@ -224,7 +219,7 @@ export async function updateKnowledgeSourceStatus(
  * Delete a knowledge document
  */
 export async function deleteKnowledgeSource(docId: string): Promise<void> {
-  const res = await fetch(`/api/knowledge/${docId}`, {
+  const res = await apiFetch(`/api/knowledge/${docId}`, {
     method: 'DELETE'
   });
 
@@ -238,15 +233,22 @@ export async function deleteKnowledgeSource(docId: string): Promise<void> {
 }
 
 /**
- * Seed official NxtWave knowledge base documents
+ * Sync official NxtWave knowledge base documents from backend SQLite
  */
 export async function seedKnowledgeSourcesToFirestore(): Promise<number> {
-  let count = 0;
-  for (const item of INITIAL_KNOWLEDGE_DOCS) {
-    await createKnowledgeSource(item);
-    count++;
+  try {
+    const res = await apiFetch('/api/knowledge');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.docs)) {
+        setLocalCache(data.docs);
+        return data.docs.length;
+      }
+    }
+  } catch (err) {
+    console.warn('[KnowledgeService] Sync note:', err);
   }
-  return count;
+  return 0;
 }
 
 /**

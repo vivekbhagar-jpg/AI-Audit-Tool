@@ -34,26 +34,27 @@ import {
 interface AuditQueueViewProps {
   jobs: AuditJob[];
   isLoading?: boolean;
+  includeSamples: boolean;
+  onToggleIncludeSamples: (include: boolean) => void;
   onSelectJobForReport: (jobId: string) => void;
   onNavigate: (screen: NavScreen) => void;
   onUpdateJobStatus?: (jobId: string, newStatus: AuditJobStatus, progress: number) => void;
-  onSeedSampleJobs?: () => Promise<void>;
 }
 
 export const AuditQueueView: React.FC<AuditQueueViewProps> = ({
   jobs,
   isLoading = false,
+  includeSamples,
+  onToggleIncludeSamples,
   onSelectJobForReport,
   onNavigate,
-  onUpdateJobStatus,
-  onSeedSampleJobs
+  onUpdateJobStatus
 }) => {
   const { isAdmin, isLead, isAuditor, isCounsellor, user, userProfile } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [productFilter, setProductFilter] = useState<string>('All');
   const [stageFilter, setStageFilter] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isSeeding, setIsSeeding] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; isError?: boolean } | null>(null);
 
   const statuses: { label: string; value: string }[] = [
@@ -142,21 +143,6 @@ export const AuditQueueView: React.FC<AuditQueueViewProps> = ({
     }
   };
 
-  const handleSeed = async () => {
-    if (!onSeedSampleJobs) return;
-    setIsSeeding(true);
-    setToastMessage(null);
-    try {
-      await onSeedSampleJobs();
-      setToastMessage({ text: 'Sample jobs successfully refreshed in the queue.', isError: false });
-      setTimeout(() => setToastMessage(null), 3000);
-    } catch (err: any) {
-      setToastMessage({ text: `Note on seeding: ${err?.message}`, isError: true });
-    } finally {
-      setIsSeeding(false);
-    }
-  };
-
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Toast notification banner */}
@@ -184,19 +170,8 @@ export const AuditQueueView: React.FC<AuditQueueViewProps> = ({
           </p>
         </div>
 
-        {isAdmin && (
+        {(isAdmin || isAuditor) && (
           <div className="flex items-center gap-2 self-start sm:self-auto">
-            {jobs.length === 0 && onSeedSampleJobs && (
-              <button
-                onClick={handleSeed}
-                disabled={isSeeding}
-                className="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
-              >
-                {isSeeding ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <FolderOpen className="w-4 h-4 text-slate-500" />}
-                <span>Load Sample Queue</span>
-              </button>
-            )}
-
             <button
               onClick={() => onNavigate('new-audit')}
               className="px-3.5 py-2 text-xs font-semibold text-white bg-[#2455E8] hover:bg-[#1d46c7] active:bg-[#183aa8] rounded-lg transition-colors shadow-xs cursor-pointer"
@@ -342,7 +317,9 @@ export const AuditQueueView: React.FC<AuditQueueViewProps> = ({
                             {job.isSample && (
                               <>
                                 <span>·</span>
-                                <span className="text-amber-700 font-semibold">[Sample]</span>
+                                <span className="text-[10px] font-bold font-mono uppercase bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded">
+                                  Benchmark Sample
+                                </span>
                               </>
                             )}
                           </div>
@@ -472,16 +449,6 @@ export const AuditQueueView: React.FC<AuditQueueViewProps> = ({
                       className="px-4 py-2 text-xs font-semibold text-white bg-[#2455E8] hover:bg-[#1d46c7] rounded-lg transition-colors shadow-xs cursor-pointer w-full sm:w-auto"
                     >
                       + Submit New Recording
-                    </button>
-                  )}
-                  {isAdmin && onSeedSampleJobs && (
-                    <button
-                      onClick={handleSeed}
-                      disabled={isSeeding}
-                      className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer w-full sm:w-auto flex items-center justify-center gap-1.5"
-                    >
-                      {isSeeding ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <FolderOpen className="w-4 h-4 text-slate-600" />}
-                      <span>Load Sample Test Queue</span>
                     </button>
                   )}
                 </div>

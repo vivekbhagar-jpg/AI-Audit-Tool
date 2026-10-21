@@ -18,7 +18,6 @@ import {
   SlidersHorizontal,
   Flame
 } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
 import { 
   PRODUCTS, 
   getStagesForProduct, 
@@ -39,7 +38,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigate,
   onSelectJobForReport
 }) => {
-  const { isConfigured } = useAuth();
   const [selectedProduct, setSelectedProduct] = useState<string>('Intensive');
   const [selectedStage, setSelectedStage] = useState<string>('All');
   const [selectedTimeRange, setSelectedTimeRange] = useState<string>('7d');

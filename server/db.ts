@@ -10,20 +10,21 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import bcrypt from 'bcryptjs';
 
 // Resolve directory paths
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const dataDir = path.join(rootDir, 'data');
-const uploadsDir = path.join(rootDir, 'uploads', 'audio');
+const recordingsDir = path.join(rootDir, 'tmp', 'recordings');
 
 // Ensure storage directories exist
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(recordingsDir)) {
+  fs.mkdirSync(recordingsDir, { recursive: true });
 }
 
 const dbPath = path.join(dataDir, 'nxtwave_audit.db');
@@ -125,27 +126,122 @@ export function initDatabase() {
       updated_at TEXT NOT NULL,
       updated_by TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      csrf_token TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS transcripts (
+      id TEXT PRIMARY KEY,
+      job_id TEXT UNIQUE NOT NULL,
+      language TEXT NOT NULL,
+      duration_seconds REAL,
+      provider TEXT NOT NULL,
+      raw_text TEXT NOT NULL,
+      turns_json TEXT NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES audit_jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      job_id TEXT,
+      event_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id TEXT PRIMARY KEY,
+      ip TEXT NOT NULL,
+      email TEXT NOT NULL,
+      attempted_at TEXT NOT NULL,
+      success INTEGER NOT NULL
+    );
   `);
 
+  runMigrations();
   seedInitialData();
+}
+
+function runMigrations() {
+  const addColumnIfNotExists = (table: string, colName: string, colDef: string) => {
+    try {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some(c => c.name === colName)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colDef};`);
+      }
+    } catch (err) {
+      console.warn(`[Migration] Could not add ${colName} to ${table}:`, err);
+    }
+  };
+
+  // audit_jobs columns
+  addColumnIfNotExists('audit_jobs', 'drive_file_id', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'drive_metadata_json', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'retry_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfNotExists('audit_jobs', 'max_retries', 'INTEGER NOT NULL DEFAULT 3');
+  addColumnIfNotExists('audit_jobs', 'error_message', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'is_retryable', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfNotExists('audit_jobs', 'worker_locked_at', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'team', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'assigned_auditor', 'TEXT');
+  addColumnIfNotExists('audit_jobs', 'raw_transcript', 'TEXT');
+
+  // audit_reports columns
+  addColumnIfNotExists('audit_reports', 'missing_narratives_json', 'TEXT');
+  addColumnIfNotExists('audit_reports', 'unsupported_claims_json', 'TEXT');
+  addColumnIfNotExists('audit_reports', 'coaching_recommendations_json', 'TEXT');
+  addColumnIfNotExists('audit_reports', 'model_identifier', 'TEXT');
+  addColumnIfNotExists('audit_reports', 'prompt_version', 'TEXT');
+
+  // Performance and lookup indexes
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_audit_jobs_status ON audit_jobs(status);
+      CREATE INDEX IF NOT EXISTS idx_audit_jobs_submitted_by ON audit_jobs(submitted_by);
+      CREATE INDEX IF NOT EXISTS idx_audit_reports_job_id ON audit_reports(job_id);
+      CREATE INDEX IF NOT EXISTS idx_transcripts_job_id ON transcripts(job_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(ip, email, attempted_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_events_job_id ON audit_events(job_id);
+    `);
+  } catch (err) {
+    console.warn('[Migration] Index creation warning:', err);
+  }
 }
 
 function seedInitialData() {
   const now = new Date().toISOString();
 
-  // 1. Seed authoritative users
-  const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }).count;
-  if (userCount === 0) {
-    const insertUser = db.prepare(`
-      INSERT INTO users (id, email, display_name, role, team, password_hash, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+  // 1. Initial administrator provisioning from server environment variables if configured
+  // Never ship default passwords, plaintext passwords, or reusable credentials.
+  const adminEmail = (process.env.INITIAL_ADMIN_EMAIL || 'vivekbhagar@gmail.com').toLowerCase().trim();
+  const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD;
 
-    insertUser.run('usr-admin-vb', 'vivekbhagar@gmail.com', 'Vivek Bhagar (Admin)', 'admin', 'Platform Administration', 'admin123', now, now);
-    insertUser.run('usr-auditor-sr', 'sunita.rao@nxtwave.tech', 'Sunita Rao (Auditor)', 'auditor', 'Quality Assurance Lead', 'staff123', now, now);
-    insertUser.run('usr-lead-rk', 'rajesh.kumar@nxtwave.tech', 'Rajesh Kumar (Lead)', 'lead', 'Admissions Quality Lead', 'staff123', now, now);
-    insertUser.run('usr-counsellor-as', 'ananya.sen@nxtwave.tech', 'Ananya Sen (Counsellor)', 'counsellor', 'Admissions Counselling', 'staff123', now, now);
-    console.log('[SQLite] Seeded 4 authoritative users.');
+  const existingAdmin = db.prepare("SELECT * FROM users WHERE role = 'admin' LIMIT 1").get() as any;
+
+  if (initialAdminPassword) {
+    const passwordHash = bcrypt.hashSync(initialAdminPassword, 12);
+    if (!existingAdmin) {
+      db.prepare(`
+        INSERT INTO users (id, email, display_name, role, team, password_hash, created_at, updated_at)
+        VALUES (?, ?, ?, 'admin', 'Platform Administration', ?, ?, ?)
+      `).run('usr-admin-vb', adminEmail, 'Vivek Bhagar (Super Admin)', passwordHash, now, now);
+      console.log('[SQLite] Initial Super Admin account provisioned from environment variables.');
+    } else {
+      db.prepare(`
+        UPDATE users SET email = ?, password_hash = ?, updated_at = ? WHERE id = ?
+      `).run(adminEmail, passwordHash, now, existingAdmin.id);
+    }
   }
 
   // 2. Seed default rubric weights
@@ -408,396 +504,6 @@ function seedInitialData() {
       );
     }
     console.log(`[SQLite] Seeded ${initialDocs.length} initial knowledge documents.`);
-  }
-
-  // 4. Seed initial audit jobs if empty
-  const jobCount = (db.prepare('SELECT COUNT(*) as count FROM audit_jobs').get() as { count: number }).count;
-  if (jobCount === 0) {
-    const insertJob = db.prepare(`
-      INSERT INTO audit_jobs (
-        id, recording_name, drive_url, audio_path, counsellor_name, counsellor_emp_id,
-        counsellor_email, product, stage, language, duration, submitted_at,
-        submitted_by, status, progress, score, critical_violation_count, is_sample,
-        notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const initialJobs = [
-      {
-        id: 'job-nw-8921',
-        recordingName: 'NW_REC_20261014_RahulVerma_AmitKumar.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1A8b9qKxLmNoPqRsTuVwXyZ12345/view',
-        counsellorName: 'Rahul Verma',
-        counsellorEmpId: 'NW-4091',
-        counsellorEmail: 'rahul.verma@nxtwave.tech',
-        product: 'Academy',
-        stage: 'DM Call/VC',
-        language: 'Hinglish (Hindi + English)',
-        duration: '28m 42s',
-        submittedAt: '2026-10-14 16:30',
-        submittedBy: 'usr-auditor-sr',
-        status: 'Needs Review',
-        progress: 100,
-        score: 68,
-        criticalViolationCount: 1,
-        isSample: 1,
-        notes: 'Severe placement claim deviation noted at 18:24. Requires auditor review.'
-      },
-      {
-        id: 'job-nw-8920',
-        recordingName: 'NW_REC_20261014_PoojaSharma_PriyaPatel.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1B7c8rLyMnOpQrStUvWxYz09876/view',
-        counsellorName: 'Pooja Sharma',
-        counsellorEmpId: 'NW-3820',
-        counsellorEmail: 'pooja.sharma@nxtwave.tech',
-        product: 'Intensive',
-        stage: 'Student Realisation Call/BOB Call',
-        language: 'Hinglish (Hindi + English)',
-        duration: '34m 10s',
-        submittedAt: '2026-10-14 15:15',
-        submittedBy: 'usr-admin-vb',
-        status: 'Completed',
-        progress: 100,
-        score: 94,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Exemplary pitch. Deep empathy, crystal clear fee breakdown and 0% EMI disclosure.'
-      },
-      {
-        id: 'job-nw-8919',
-        recordingName: 'NW_REC_20261014_KarthikReddy_SureshNaidu.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1C6d9sMzAoPqRsTuVwXyZa11223/view',
-        counsellorName: 'Karthik Reddy',
-        counsellorEmpId: 'NW-4215',
-        counsellorEmail: 'karthik.reddy@nxtwave.tech',
-        product: 'Academy',
-        stage: 'Student Realisation Call/BOB Call',
-        language: 'Telugu + English',
-        duration: '22m 18s',
-        submittedAt: '2026-10-14 14:00',
-        submittedBy: 'usr-auditor-sr',
-        status: 'Completed',
-        progress: 100,
-        score: 81,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Solid counselling. Missed mentioning the 4-phase mock interview schedule.'
-      },
-      {
-        id: 'job-nw-8918',
-        recordingName: 'NW_REC_20261014_SnehaRoy_RohanMehta.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1D5e8tNbBqRsTuVwXyZb33445/view',
-        counsellorName: 'Sneha Roy',
-        counsellorEmpId: 'NW-3950',
-        counsellorEmail: 'sneha.roy@nxtwave.tech',
-        product: 'NIAT',
-        stage: 'Closure VC',
-        language: 'Hindi (Pure)',
-        duration: '19m 45s',
-        submittedAt: '2026-10-14 11:40',
-        submittedBy: 'usr-admin-vb',
-        status: 'Completed',
-        progress: 100,
-        score: 52,
-        criticalViolationCount: 2,
-        isSample: 1,
-        notes: 'Critical zero-tolerance failure: promised unapproved ₹15,000 spot cash waiver.'
-      },
-      {
-        id: 'job-nw-8917',
-        recordingName: 'NW_REC_20261015_VikasGupta_DeepakSingh.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1E4f7uOcCrStUvWxYzAc55667/view',
-        counsellorName: 'Vikas Gupta',
-        counsellorEmpId: 'NW-4310',
-        counsellorEmail: 'vikas.gupta@nxtwave.tech',
-        product: 'NIAT',
-        stage: 'Interview VC',
-        language: 'Hinglish (Hindi + English)',
-        duration: '26m 05s',
-        submittedAt: '2026-10-15 10:20',
-        submittedBy: 'usr-auditor-sr',
-        status: 'Auditing',
-        progress: 72,
-        score: null,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Audio transcription finished; running multi-dimensional knowledge base audit.'
-      },
-      {
-        id: 'job-nw-8916',
-        recordingName: 'NW_REC_20261015_PoojaSharma_AnanyaDas.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1F3g6vPdDsTuVwXyZaBd77889/view',
-        counsellorName: 'Pooja Sharma',
-        counsellorEmpId: 'NW-3820',
-        counsellorEmail: 'pooja.sharma@nxtwave.tech',
-        product: 'NIAT - Academy',
-        stage: 'Lead Qualification Call',
-        language: 'English',
-        duration: '18m 50s',
-        submittedAt: '2026-10-15 11:05',
-        submittedBy: 'usr-auditor-sr',
-        status: 'Transcribing',
-        progress: 38,
-        score: null,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Speech diaritization in progress via Hinglish acoustics model.'
-      },
-      {
-        id: 'job-nw-8915',
-        recordingName: 'NW_REC_20261015_AdityaNair_VishnuPrasad.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1G2h5wQeEtUvWxYzBcCe99001/view',
-        counsellorName: 'Aditya Nair',
-        counsellorEmpId: 'NW-4402',
-        counsellorEmail: 'aditya.nair@nxtwave.tech',
-        product: 'Intensive',
-        stage: 'Lead Qualification Call',
-        language: 'Hinglish (Hindi + English)',
-        duration: '15m 30s',
-        submittedAt: '2026-10-15 12:10',
-        submittedBy: 'usr-admin-vb',
-        status: 'Queued',
-        progress: 0,
-        score: null,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Queued in ingestion pipeline. Awaiting audio pre-processor slot.'
-      },
-      {
-        id: 'job-nw-8914',
-        recordingName: 'NW_REC_20261015_MeeraNambiar_SiddharthVerma.mp3',
-        driveUrl: 'https://drive.google.com/file/d/1H1i4vRfFtVwXyZaCdDf00112/view',
-        counsellorName: 'Meera Nambiar',
-        counsellorEmpId: 'NW-4512',
-        counsellorEmail: 'meera.nambiar@nxtwave.tech',
-        product: 'IIT KGP OCN',
-        stage: 'Student Realisation Call/BOB Call',
-        language: 'English',
-        duration: '24m 15s',
-        submittedAt: '2026-10-15 13:45',
-        submittedBy: 'usr-auditor-sr',
-        status: 'Completed',
-        progress: 100,
-        score: 88,
-        criticalViolationCount: 0,
-        isSample: 1,
-        notes: 'Excellent clarity on IIT KGP faculty credentials and live project capstones.'
-      }
-    ];
-
-    for (const j of initialJobs) {
-      insertJob.run(
-        j.id,
-        j.recordingName,
-        j.driveUrl,
-        null,
-        j.counsellorName,
-        j.counsellorEmpId,
-        j.counsellorEmail,
-        j.product,
-        j.stage,
-        j.language,
-        j.duration,
-        j.submittedAt,
-        j.submittedBy,
-        j.status,
-        j.progress,
-        j.score,
-        j.criticalViolationCount,
-        j.isSample,
-        j.notes,
-        now,
-        now
-      );
-    }
-    console.log(`[SQLite] Seeded ${initialJobs.length} initial audit jobs.`);
-  }
-
-  // 5. Seed primary report if empty
-  const reportCount = (db.prepare('SELECT COUNT(*) as count FROM audit_reports').get() as { count: number }).count;
-  if (reportCount === 0) {
-    const primaryReport = {
-      id: 'report-nw-8921',
-      jobId: 'job-nw-8921',
-      counsellorName: 'Rahul Verma',
-      counsellorEmpId: 'NW-4091',
-      team: 'Team Alpha (Hyderabad Tech Sales)',
-      product: 'Academy',
-      stage: 'DM Call/VC',
-      language: 'Hinglish (Hindi + English)',
-      duration: '28m 42s',
-      callDate: '2026-10-14 16:30',
-      auditDate: '2026-10-14 17:15',
-      overallScore: 68,
-      maxScore: 100,
-      complianceTier: 'Needs Coaching',
-      isSample: 1,
-      reviewerReview: {
-        auditorName: 'Sunita Rao',
-        auditorEmail: 'sunita.rao@nxtwave.tech',
-        status: 'Approved',
-        originalScore: 68,
-        finalScore: 68,
-        notes: 'The counsellor demonstrated strong rapport and technical empathy, but committed a serious compliance infraction at 18:24 by assuring a 100% Google interview placement drive without mentioning the mandatory 85% IRC milestone. Assigned 1-on-1 coaching drill with Team Lead.'
-      },
-      criteriaScores: [
-        {
-          dimensionId: 'dim-1',
-          name: 'Greeting & Rapport Building',
-          score: 9,
-          maxScore: 10,
-          weightPercent: 10,
-          status: 'Compliant',
-          feedback: 'Warm, professional opening in natural Hinglish. Verified prospect availability and confirmed interest.'
-        },
-        {
-          dimensionId: 'dim-2',
-          name: 'Need Analysis & Student Profiling',
-          score: 13,
-          maxScore: 15,
-          weightPercent: 15,
-          status: 'Compliant',
-          feedback: 'Thoroughly inquired regarding academic branch (ECE), current coding familiarity, and daily available study hours.'
-        },
-        {
-          dimensionId: 'dim-3',
-          name: 'Curriculum & Pedagogy Accuracy',
-          score: 12,
-          maxScore: 15,
-          weightPercent: 15,
-          status: 'Compliant',
-          feedback: 'Accurately outlined Python & SQL tracks. Accurately explained hands-on code playground.'
-        },
-        {
-          dimensionId: 'dim-4',
-          name: 'Placement & Career Claims Adherence',
-          score: 6,
-          maxScore: 20,
-          weightPercent: 20,
-          status: 'Non-Compliant',
-          feedback: 'CRITICAL INFRACTION: Promised guaranteed interview drives with Google and Microsoft without explaining the prerequisite 85% IRC milestone.'
-        },
-        {
-          dimensionId: 'dim-5',
-          name: 'Pricing, Scholarship & EMI Transparency',
-          score: 11,
-          maxScore: 15,
-          weightPercent: 15,
-          status: 'Needs Coaching',
-          feedback: 'Quoted base fee accurately, but hesitated when explaining NBFC partner interest subsidization terms.'
-        },
-        {
-          dimensionId: 'dim-6',
-          name: 'Objection Handling & Empathy',
-          score: 8,
-          maxScore: 10,
-          weightPercent: 10,
-          status: 'Compliant',
-          feedback: 'Handled parent hesitation regarding semester examination clash with great patience and flexible scheduling advice.'
-        },
-        {
-          dimensionId: 'dim-7',
-          name: 'Urgency & Ethical Next Steps',
-          score: 5,
-          maxScore: 10,
-          weightPercent: 10,
-          status: 'Needs Coaching',
-          feedback: 'Applied moderate artificial urgency regarding scholarship deadline expiring at midnight.'
-        },
-        {
-          dimensionId: 'dim-8',
-          name: 'Professional Tone & Language Clarity',
-          score: 4,
-          maxScore: 5,
-          weightPercent: 5,
-          status: 'Compliant',
-          feedback: 'Articulate communication, respectful tone throughout 28-minute call.'
-        }
-      ],
-      criticalViolations: [
-        {
-          id: 'crit-01',
-          dimension: 'Placement & Career Claims Adherence',
-          timestamp: '18:24',
-          snippet: 'Bhaiya aap tension mat lo, 6 mahine baad direct Google aur Amazon ke interview rounds schedule honge aapke liye.',
-          policyClauseRef: 'CCBP-4.0-Policy Clause 3.4 (Tier-1 Company Citation Restriction)',
-          severity: 'Critical',
-          remedialGuidance: 'Must clarify that NxtWave provides hiring drives with 3,000+ hiring partners based on candidate clearing the 85% IRC benchmark.'
-        }
-      ],
-      observations: [
-        {
-          type: 'Strength',
-          title: 'Strong Technical Empathy',
-          description: 'Counsellor spent 6 minutes patiently comforting non-CS student regarding fear of mathematics in programming.'
-        },
-        {
-          type: 'Improvement',
-          title: 'Unverified Placement Claims',
-          description: 'Avoid naming specific FAANG companies as guaranteed campus drives.'
-        }
-      ],
-      transcript: [
-        {
-          speaker: 'Counsellor',
-          speakerName: 'Rahul Verma',
-          timestamp: '00:04',
-          originalText: 'Hello Amit! Main Rahul bol raha hoon NxtWave se. Kya abhi baat karne ka sahi time hai?',
-          englishTranslation: 'Hello Amit! I am Rahul speaking from NxtWave. Is this a good time to speak?',
-          isFlagged: false
-        },
-        {
-          speaker: 'Prospect',
-          speakerName: 'Amit Kumar',
-          timestamp: '00:12',
-          originalText: 'Haan Rahul ji, boliye. Maine scholarship test ke liye register kiya tha.',
-          englishTranslation: 'Yes Rahul, please tell me. I had registered for the scholarship test.',
-          isFlagged: false
-        },
-        {
-          speaker: 'Counsellor',
-          speakerName: 'Rahul Verma',
-          timestamp: '18:24',
-          originalText: 'Bhaiya aap tension mat lo, 6 mahine baad direct Google aur Amazon ke interview rounds schedule honge aapke liye.',
-          englishTranslation: 'Brother do not worry, after 6 months direct interview rounds with Google and Amazon will be scheduled for you.',
-          isFlagged: true,
-          flaggedReason: 'Unauthorized placement guarantee with Tier-1 tech giants without citing 85% IRC benchmark prerequisite.'
-        }
-      ]
-    };
-
-    db.prepare(`
-      INSERT INTO audit_reports (
-        id, job_id, counsellor_name, counsellor_emp_id, team, product, stage, language,
-        duration, call_date, audit_date, overall_score, max_score, compliance_tier,
-        is_sample, criteria_scores_json, critical_violations_json, observations_json,
-        transcript_json, reviewer_review_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      primaryReport.id,
-      primaryReport.jobId,
-      primaryReport.counsellorName,
-      primaryReport.counsellorEmpId,
-      primaryReport.team,
-      primaryReport.product,
-      primaryReport.stage,
-      primaryReport.language,
-      primaryReport.duration,
-      primaryReport.callDate,
-      primaryReport.auditDate,
-      primaryReport.overallScore,
-      primaryReport.maxScore,
-      primaryReport.complianceTier,
-      primaryReport.isSample,
-      JSON.stringify(primaryReport.criteriaScores),
-      JSON.stringify(primaryReport.criticalViolations),
-      JSON.stringify(primaryReport.observations),
-      JSON.stringify(primaryReport.transcript),
-      JSON.stringify(primaryReport.reviewerReview),
-      now,
-      now
-    );
-    console.log('[SQLite] Seeded primary sample audit report.');
   }
 }
 

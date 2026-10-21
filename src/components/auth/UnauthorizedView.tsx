@@ -15,11 +15,10 @@ import {
   ExternalLink 
 } from 'lucide-react';
 
-const NXTWAVE_LOGO_URL =
-  'https://firebasestorage.googleapis.com/v0/b/nxtwave-audit-platform.firebasestorage.app/o/NXT%20WAVE%E2%84%A2%20Geometric%20Blue%20Logo.png?alt=media&token=d070f55a-8c3b-463b-a87d-1be157faf3d7';
+const NXTWAVE_LOGO_URL = '/nxtwave-logo.png';
 
 export const UnauthorizedView: React.FC = () => {
-  const { user, roleError, signOutUser } = useAuth();
+  const { user, error: roleError, signOutUser } = useAuth();
 
   return (
     <div className="min-h-screen bg-white text-slate-900 flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-[#2455E8] selection:text-white">

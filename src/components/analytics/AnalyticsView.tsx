@@ -3,27 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuditJob, CounsellorSummary } from '../../types';
-import { 
-  COUNSELLOR_SUMMARIES as SAMPLE_COUNSELLOR_SUMMARIES, 
-  TEAM_ANALYTICS as SAMPLE_TEAM_ANALYTICS, 
-  COMMON_AUDIT_FAILURES as SAMPLE_COMMON_FAILURES, 
-  SCORE_TREND_WEEKS as SAMPLE_SCORE_TRENDS 
-} from '../../data/sampleData';
 import { 
   BarChart3, 
   TrendingUp, 
   Users, 
   AlertTriangle, 
-  Award, 
-  Flame, 
   ShieldCheck, 
   SlidersHorizontal,
-  Calendar,
-  Layers
+  FolderOpen
 } from 'lucide-react';
-import { getAllAuditReports } from '../../services/reportService';
 import { 
   PRODUCTS, 
   PRODUCT_STAGE_MAP, 
@@ -39,13 +29,11 @@ interface AnalyticsViewProps {
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   jobs = [],
-  isDemoMode = false,
 }) => {
   const [selectedProduct, setSelectedProduct] = useState<string>('All');
   const [selectedStage, setSelectedStage] = useState<string>('All');
   const [selectedTeam, setSelectedTeam] = useState<string>('All');
   const [sortField, setSortField] = useState<'averageScore' | 'auditsCount' | 'violationRate'>('averageScore');
-  const [showDemoPreview, setShowDemoPreview] = useState<boolean>(isDemoMode);
 
   const completedJobs = jobs.filter(
     (j) => (j.status === 'Completed' || j.status === 'Needs Review') && 
@@ -54,7 +42,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
            matchesStage(j.stage, selectedStage)
   );
 
-  // Compute dynamic counsellor summaries from real jobs
+  // Compute dynamic counsellor summaries from real completed jobs
   const dynamicCounsellors: CounsellorSummary[] = React.useMemo(() => {
     if (completedJobs.length === 0) return [];
 
@@ -62,6 +50,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       name: string;
       empId: string;
       product: string;
+      team: string;
       scores: number[];
       criticalCount: number;
     }>();
@@ -73,6 +62,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           name: job.counsellorName,
           empId: job.counsellorEmpId,
           product: job.product,
+          team: job.team || `${job.product} Team`,
           scores: [],
           criticalCount: 0,
         });
@@ -95,30 +85,63 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         id: `counsellor-${idx + 1}`,
         name: val.name,
         empId: val.empId,
-        team: `${val.product} Squad`,
+        team: val.team,
         auditsCount: val.scores.length,
         averageScore: avg,
         violationRate,
         status,
-        streakWeeks: 2,
+        streakWeeks: 0,
       };
     });
   }, [completedJobs]);
 
-  const hasRealData = dynamicCounsellors.length > 0;
-  const isShowingDemo = showDemoPreview || !hasRealData;
+  // Compute real team analytics from completed jobs
+  const teamAnalytics = React.useMemo(() => {
+    if (completedJobs.length === 0) return [];
 
-  const counsellorsToDisplay = isShowingDemo ? SAMPLE_COUNSELLOR_SUMMARIES : dynamicCounsellors;
-  const commonFailuresToDisplay = SAMPLE_COMMON_FAILURES;
-  const scoreTrendsToDisplay = SAMPLE_SCORE_TRENDS;
+    const map = new Map<string, {
+      team: string;
+      scores: number[];
+      criticalViolations: number;
+      auditors: Set<string>;
+    }>();
 
-  const filteredCounsellors = counsellorsToDisplay
-    .filter(c => selectedTeam === 'All' || c.team.includes(selectedTeam))
+    completedJobs.forEach((job) => {
+      const team = job.team || `${job.product} Team`;
+      if (!map.has(team)) {
+        map.set(team, {
+          team,
+          scores: [],
+          criticalViolations: 0,
+          auditors: new Set<string>()
+        });
+      }
+      const entry = map.get(team)!;
+      if (typeof job.score === 'number') {
+        entry.scores.push(job.score);
+      }
+      entry.criticalViolations += (job.criticalViolationCount || 0);
+      if (job.assignedAuditor) entry.auditors.add(job.assignedAuditor);
+    });
+
+    return Array.from(map.values()).map((t) => ({
+      team: t.team,
+      avgScore: t.scores.length ? Math.round((t.scores.reduce((a, b) => a + b, 0) / t.scores.length) * 10) / 10 : 0,
+      auditsThisMonth: t.scores.length,
+      auditorsCount: Math.max(t.auditors.size, 1),
+      criticalViolations: t.criticalViolations
+    }));
+  }, [completedJobs]);
+
+  const filteredCounsellors = dynamicCounsellors
+    .filter(c => selectedTeam === 'All' || c.team.toLowerCase().includes(selectedTeam.toLowerCase()))
     .sort((a, b) => {
       if (sortField === 'averageScore') return b.averageScore - a.averageScore;
       if (sortField === 'auditsCount') return b.auditsCount - a.auditsCount;
       return a.violationRate - b.violationRate;
     });
+
+  const availableTeams = Array.from(new Set(completedJobs.map(j => j.team || `${j.product} Team`))).filter(Boolean);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -129,7 +152,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             Quality &amp; Compliance Analytics
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Aggregated audit performance benchmarks, trends, and common script deviations.
+            Real-time quality intelligence calculated from audited admissions calls.
           </p>
         </div>
 
@@ -183,160 +206,139 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               className="bg-transparent text-slate-800 font-medium focus:outline-none cursor-pointer"
             >
               <option value="All">All Counselling Teams</option>
-              <option value="Hyderabad">Team Alpha (Hyderabad)</option>
-              <option value="Bengaluru">Team Beta (Bengaluru)</option>
-              <option value="Delhi">Team Delta (Delhi NCR)</option>
+              {availableTeams.map((teamName) => (
+                <option key={teamName} value={teamName}>{teamName}</option>
+              ))}
             </select>
           </div>
         </div>
       </div>
 
-      {/* Row 1: Weekly Score Trend & Common Failure Root Causes */}
+      {/* Row 1: Weekly Score Trend & Team Quality Benchmarks */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Score Trend Trajectory */}
+        {/* Quality Score Trajectory */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-bold text-slate-900">Quality Score Trajectory</h2>
-              <p className="text-xs text-slate-500">Weekly average quality score across audited calls</p>
+              <p className="text-xs text-slate-500">Average quality score across audited calls</p>
             </div>
             <div className="flex items-center gap-1 text-xs text-emerald-700 font-semibold font-mono">
               <TrendingUp className="w-3.5 h-3.5" />
-              <span>{isShowingDemo ? '+8.1 pts over 6 weeks' : `${completedJobs.length} audited`}</span>
+              <span>{completedJobs.length} Audited Calls</span>
             </div>
           </div>
 
-          <div className="space-y-3 pt-2">
-            {scoreTrendsToDisplay.map((w) => (
-              <div key={w.week} className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="font-semibold text-slate-700">{w.week}</span>
-                  <div className="flex items-center gap-3 font-mono text-xs">
-                    <span className="text-slate-500">{w.audits} calls</span>
-                    <span className="font-bold text-slate-900">{w.avgScore} / 100</span>
+          <div className="pt-2">
+            {completedJobs.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400 space-y-1">
+                <BarChart3 className="w-6 h-6 text-slate-300 mx-auto" />
+                <p className="font-medium text-slate-600">No scored call audits recorded yet</p>
+                <p className="text-[11px] text-slate-400">Score trajectories will chart automatically as calls complete evaluation.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div>
+                    <span className="text-xs text-slate-500 block">Average Quality Score</span>
+                    <span className="text-2xl font-bold font-mono text-slate-900">
+                      {Math.round((completedJobs.reduce((acc, curr) => acc + (curr.score || 0), 0) / completedJobs.length) * 10) / 10} / 100
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-500 block">Total Evaluated</span>
+                    <span className="text-2xl font-bold font-mono text-slate-900">
+                      {completedJobs.length} calls
+                    </span>
                   </div>
                 </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div 
-                    className="bg-blue-600 h-full rounded-full transition-all"
-                    style={{ width: `${w.avgScore}%` }}
-                  />
-                </div>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
-        {/* Common Audit Failures Breakdown */}
+        {/* Team Quality Benchmarks */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">Common Audit Failures (Pareto Distribution)</h2>
-            <p className="text-xs text-slate-500">Most frequent non-compliance findings in speech QA</p>
+            <h2 className="text-sm font-bold text-slate-900">Team Quality Benchmarks</h2>
+            <p className="text-xs text-slate-500">Cross-team adherence and critical violation rates</p>
           </div>
 
-          <div className="space-y-3 pt-1">
-            {commonFailuresToDisplay.map((f) => (
-              <div key={f.issue} className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-1.5 max-w-[70%]">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      f.severity === 'Critical' ? 'bg-rose-600' : f.severity === 'High' ? 'bg-amber-500' : 'bg-slate-400'
-                    }`} />
-                    <span className="font-medium text-slate-800 truncate">{f.issue}</span>
+          <div className="pt-1">
+            {teamAnalytics.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400 space-y-1">
+                <Users className="w-6 h-6 text-slate-300 mx-auto" />
+                <p className="font-medium text-slate-600">No team quality benchmarks yet</p>
+                <p className="text-[11px] text-slate-400">Team aggregates will populate once call recordings are ingested and audited.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {teamAnalytics.map((t) => (
+                  <div key={t.team} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-slate-900 truncate max-w-[140px]">{t.team}</span>
+                      <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-white text-slate-700 border border-slate-200">
+                        {t.avgScore} / 100
+                      </span>
+                    </div>
+                    <div className="space-y-1 text-xs text-slate-600">
+                      <div className="flex justify-between">
+                        <span>Audited Calls:</span>
+                        <span className="font-mono font-semibold text-slate-800">{t.auditsThisMonth}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Critical Flags:</span>
+                        <span className={`font-mono font-semibold ${t.criticalViolations > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                          {t.criticalViolations}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <span className="font-mono text-xs font-semibold text-slate-700 tabular-nums">
-                    {f.count} calls ({f.percentage}%)
-                  </span>
-                </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full ${
-                      f.severity === 'Critical' ? 'bg-rose-600' : f.severity === 'High' ? 'bg-amber-500' : 'bg-slate-500'
-                    }`}
-                    style={{ width: `${f.percentage * 2.5}%` }}
-                  />
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
-
-          <div className="pt-2 border-t border-slate-100 text-xs text-slate-500">
-            Audit finding: Over 60% of critical failures stem from placement guarantee oversell and unauthorized discounting.
+            )}
           </div>
         </div>
       </div>
 
-      {/* Row 2: Team Performance Matrix */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
-        <div>
-          <h2 className="text-sm font-bold text-slate-900">Team Quality Benchmarks</h2>
-          <p className="text-xs text-slate-500">Cross-team adherence and critical violation rates</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {SAMPLE_TEAM_ANALYTICS.map((t) => (
-            <div key={t.team} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-slate-900 truncate max-w-[150px]">{t.team}</span>
-                <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-white text-slate-700 border border-slate-200">
-                  {t.avgScore} / 100
-                </span>
-              </div>
-              <div className="space-y-1 text-xs text-slate-600">
-                <div className="flex justify-between">
-                  <span>Audits This Month:</span>
-                  <span className="font-mono font-semibold text-slate-800">{t.auditsThisMonth}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Auditors:</span>
-                  <span className="font-mono text-slate-700">{t.auditorsCount} active</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Critical Flags:</span>
-                  <span className={`font-mono font-semibold ${t.criticalViolations > 5 ? 'text-rose-600' : 'text-slate-800'}`}>
-                    {t.criticalViolations}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Row 3: Counsellor Performance Leaderboard */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
-        <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* Row 2: Counsellor Performance & Compliance Matrix */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-2xs overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">Counsellor Compliance Leaderboard</h2>
-            <p className="text-xs text-slate-500">Individual performance metrics and coaching flags</p>
+            <h2 className="text-base font-bold text-slate-900">
+              Counsellor Compliance &amp; Performance Directory
+            </h2>
+            <p className="text-xs text-slate-500">
+              Individual compliance rates and average scores computed from completed call audits.
+            </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-medium">Sort by:</span>
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-medium">
+            <span className="text-xs font-semibold text-slate-500">Sort by:</span>
+            <div className="flex items-center bg-slate-100 p-1 rounded-lg text-xs font-medium text-slate-600">
               <button
                 onClick={() => setSortField('averageScore')}
                 className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-                  sortField === 'averageScore' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600'
+                  sortField === 'averageScore' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'hover:text-slate-900'
                 }`}
               >
-                Avg Score
+                Score
               </button>
               <button
                 onClick={() => setSortField('auditsCount')}
                 className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-                  sortField === 'auditsCount' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600'
+                  sortField === 'auditsCount' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'hover:text-slate-900'
                 }`}
               >
-                Audits Count
+                Audits
               </button>
               <button
                 onClick={() => setSortField('violationRate')}
                 className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-                  sortField === 'violationRate' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600'
+                  sortField === 'violationRate' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'hover:text-slate-900'
                 }`}
               >
-                Violation Rate
+                Infractions
               </button>
             </div>
           </div>
@@ -355,7 +357,17 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredCounsellors.map((c) => (
+              {filteredCounsellors.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-12 text-center space-y-3">
+                    <Users className="w-8 h-8 text-slate-300 mx-auto" />
+                    <h3 className="text-sm font-semibold text-slate-800">No Operational Audits Evaluated Yet</h3>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      Once counselling calls are processed through speech QA and signed off by auditors, individual performance scorecards and compliance ratings will appear here.
+                    </p>
+                  </td>
+                </tr>
+              ) : filteredCounsellors.map((c) => (
                 <tr key={c.id} className="hover:bg-slate-50/70 transition-colors">
                   <td className="px-4 py-3.5">
                     <div className="font-semibold text-slate-900">{c.name}</div>

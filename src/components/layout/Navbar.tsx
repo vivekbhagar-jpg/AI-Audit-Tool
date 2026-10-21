@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { NavScreen } from '../../types';
-import { useAuth, isEmbeddedInIframe, DEMO_USER_PRESETS, DemoUserRole } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { 
   PlusCircle, 
-  LogIn, 
   LogOut, 
-  RefreshCw,
-  ExternalLink,
-  Users
+  Settings,
+  ShieldCheck,
+  UserCheck
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -18,8 +17,7 @@ interface NavbarProps {
   onToggleDemoMode?: () => void;
 }
 
-export const NXTWAVE_LOGO_URL =
-  'https://firebasestorage.googleapis.com/v0/b/nxtwave-audit-platform.firebasestorage.app/o/NXT%20WAVE%E2%84%A2%20Geometric%20Blue%20Logo.png?alt=media&token=d070f55a-8c3b-463b-a87d-1be157faf3d7';
+export const NXTWAVE_LOGO_URL = '/nxtwave-logo.png';
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentScreen,
@@ -35,17 +33,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     isLead,
     isAuditor,
     isCounsellor,
-    isConfigured, 
-    isDemoUser,
-    signInWithGoogle, 
-    signInAsDemoUser,
-    signOutUser, 
-    loading, 
-    isSigningIn, 
-    openStandaloneTab 
+    signOutUser
   } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const inIframe = isEmbeddedInIframe();
 
   return (
     <header className="flex items-center justify-between gap-6 px-6 py-3 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
@@ -135,55 +125,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="font-medium">Sign Out</span>
               </button>
             </div>
-          ) : isConfigured ? (
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => signInWithGoogle()}
-                disabled={loading || isSigningIn}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer shadow-2xs disabled:opacity-60"
-              >
-                {isSigningIn ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                    <span>Signing in...</span>
-                  </>
-                ) : (
-                  <>
-                    <LogIn className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Sign in with Google</span>
-                  </>
-                )}
-              </button>
-              {inIframe && (
-                <button
-                  onClick={openStandaloneTab}
-                  className="hidden md:flex items-center gap-1 px-2 py-1.5 text-xs text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                  title="Open app in new tab to sign in without iframe restrictions"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span className="text-[11px]">New Tab</span>
-                </button>
-              )}
-            </div>
-          ) : (
-            <div 
-              onClick={() => onNavigate('settings')} 
-              className="flex items-center gap-2 cursor-pointer"
-              title="Demo Mode: Sunita Rao. Configure Firebase in Settings to enable live Google Sign-in."
-            >
-              <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs flex items-center justify-center border border-slate-200">
-                SR
-              </div>
-              <div className="hidden xl:flex flex-col text-left">
-                <span className="text-xs font-medium text-slate-900 leading-tight">Sunita Rao</span>
-                <span className="text-[10px] text-slate-500 leading-tight">Lead QA Auditor</span>
-              </div>
-            </div>
-          )}
+          ) : null}
 
           {/* Profile Dropdown */}
           {showProfileMenu && user && (
-            <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-50 text-xs animate-fadeIn">
+            <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-50 text-xs animate-fadeIn">
               <div className="px-3 py-2 border-b border-slate-100">
                 <p className="font-semibold text-slate-900 truncate">{user.displayName || 'Staff'}</p>
                 <p className="text-[11px] text-slate-500 truncate font-mono">{user.email}</p>
@@ -193,43 +139,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                   }`}>
                     {isAdmin ? 'ADMINISTRATOR' : (userProfile?.role?.toUpperCase() || 'COUNSELLOR')}
                   </span>
-                  {isDemoUser && (
-                    <span className="text-[9px] font-mono uppercase px-1 py-0.5 rounded font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Sandbox Session
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Fast Role Switcher */}
-              <div className="py-2 border-b border-slate-100">
-                <span className="px-3 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-semibold block mb-1">
-                  Switch Active Role
-                </span>
-                <div className="space-y-0.5">
-                  {(Object.keys(DEMO_USER_PRESETS) as DemoUserRole[]).map((rKey) => {
-                    const preset = DEMO_USER_PRESETS[rKey];
-                    const isActive = userProfile?.role === rKey || (rKey === 'admin' && isAdmin);
-                    return (
-                      <button
-                        key={rKey}
-                        onClick={() => {
-                          setShowProfileMenu(false);
-                          signInAsDemoUser(rKey);
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-left transition-colors cursor-pointer ${
-                          isActive 
-                            ? 'bg-blue-50 text-blue-900 font-semibold' 
-                            : 'hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <span className="truncate">{preset.displayName.split(' (')[0]}</span>
-                        <span className={`text-[9px] font-mono uppercase px-1 py-0.2 rounded border ${preset.badgeClass}`}>
-                          {preset.role}
-                        </span>
-                      </button>
-                    );
-                  })}
+                  <span className="text-[9px] font-mono uppercase px-1 py-0.5 rounded font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-0.5">
+                    <ShieldCheck className="w-2.5 h-2.5" />
+                    Verified
+                  </span>
                 </div>
               </div>
 
@@ -243,6 +156,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     className="w-full text-left px-3 py-2 text-slate-700 hover:bg-slate-50 rounded-md transition-colors font-medium flex items-center justify-between"
                   >
                     <span>Settings &amp; Rules</span>
+                    <Settings className="w-3.5 h-3.5 text-slate-400" />
                   </button>
                 )}
                 <button
